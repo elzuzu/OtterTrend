@@ -618,3 +618,693 @@ class TradingBotLoop:
 - **recvWindow**: Requis dans les options CCXT, typiquement 60000ms
 - **Rate limits plus stricts** - ajouter enableRateLimit=True
 - **Frais 0% maker** - optimiser pour ordres limite quand possible
+
+---
+
+## T0.6 - Architecture Modulaire (Interfaces & Abstractions)
+
+> **Objectif**: Assurer que chaque composant est interchangeable via des interfaces abstraites.
+> Cela permet de swapper facilement l'exchange (MEXC → Binance), le LLM (Groq → OpenAI), etc.
+
+### T0.6.1 - Créer les interfaces de base
+**Priorité**: CRITIQUE
+**Estimation**: Moyenne
+
+Créer `src/interfaces.py` avec les protocoles/ABC pour tous les composants :
+
+```python
+"""
+Interfaces abstraites pour la modularité du bot.
+Chaque composant majeur doit implémenter une interface.
+"""
+
+from abc import ABC, abstractmethod
+from typing import Any, Dict, List, Optional, Generator
+from dataclasses import dataclass
+
+
+# === EXCHANGE INTERFACE ===
+
+class BaseExchange(ABC):
+    """
+    Interface abstraite pour un exchange.
+    Permet de swapper MEXC ↔ Binance ↔ OKX ↔ Paper Trading.
+    """
+
+    @abstractmethod
+    async def get_ticker(self, symbol: str) -> Dict[str, Any]:
+        """Récupère le ticker pour un symbole"""
+        ...
+
+    @abstractmethod
+    async def get_tickers(self, symbols: List[str]) -> Dict[str, Dict]:
+        """Récupère les tickers pour plusieurs symboles"""
+        ...
+
+    @abstractmethod
+    async def get_orderbook(self, symbol: str, depth: int = 20) -> Dict[str, Any]:
+        """Récupère le carnet d'ordres"""
+        ...
+
+    @abstractmethod
+    async def get_balance(self) -> Dict[str, Any]:
+        """Récupère la balance du compte"""
+        ...
+
+    @abstractmethod
+    async def place_order(
+        self,
+        symbol: str,
+        side: str,
+        amount: float,
+        order_type: str = "market",
+        price: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Place un ordre"""
+        ...
+
+    @abstractmethod
+    async def cancel_order(self, order_id: str, symbol: str) -> Dict[str, Any]:
+        """Annule un ordre"""
+        ...
+
+    @abstractmethod
+    async def close(self) -> None:
+        """Ferme la connexion"""
+        ...
+
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        """Nom de l'exchange (mexc, binance, paper, etc.)"""
+        ...
+
+    @property
+    @abstractmethod
+    def fees(self) -> Dict[str, float]:
+        """Retourne les frais {maker: x, taker: y}"""
+        ...
+
+
+# === LLM INTERFACE ===
+
+class BaseLLMAdapter(ABC):
+    """
+    Interface abstraite pour un provider LLM.
+    Permet de swapper Groq ↔ OpenAI ↔ Anthropic ↔ Local.
+    """
+
+    @abstractmethod
+    def stream_chat(
+        self,
+        messages: List[Dict],
+        tools: Optional[List[Dict]] = None,
+        tool_choice: str = "auto",
+        temperature: float = 0.2,
+        max_tokens: int = 1024,
+    ) -> Generator[Dict, None, None]:
+        """Stream une réponse chat avec support function calling"""
+        ...
+
+    @abstractmethod
+    def get_model_info(self) -> Dict[str, Any]:
+        """Retourne les infos du modèle (nom, limites, etc.)"""
+        ...
+
+    @property
+    @abstractmethod
+    def supports_tools(self) -> bool:
+        """Indique si le modèle supporte les function calls"""
+        ...
+
+
+# === DATA PROVIDER INTERFACES ===
+
+class BaseTrendsProvider(ABC):
+    """
+    Interface pour les providers de tendances.
+    Permet de swapper Google Trends ↔ Autre source.
+    """
+
+    @abstractmethod
+    async def get_interest_over_time(
+        self,
+        keywords: List[str],
+        timeframe: str = "now 7-d",
+    ) -> Dict[str, Any]:
+        """Récupère l'intérêt dans le temps pour des mots-clés"""
+        ...
+
+    @abstractmethod
+    async def get_related_queries(self, keyword: str) -> Dict[str, List[str]]:
+        """Récupère les recherches associées"""
+        ...
+
+
+class BaseNewsProvider(ABC):
+    """
+    Interface pour les providers de news.
+    Permet de swapper CryptoCompare ↔ CoinGecko ↔ RSS.
+    """
+
+    @abstractmethod
+    async def get_news(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """Récupère les dernières news"""
+        ...
+
+    @abstractmethod
+    async def search_news_by_symbol(
+        self, symbol: str, limit: int = 10
+    ) -> List[Dict[str, Any]]:
+        """Recherche les news pour un symbole"""
+        ...
+
+
+class BaseSentimentAnalyzer(ABC):
+    """
+    Interface pour l'analyse de sentiment.
+    Permet de swapper règles simples ↔ FinBERT ↔ GPT.
+    """
+
+    @abstractmethod
+    def analyze(self, text: str) -> Dict[str, Any]:
+        """Analyse le sentiment d'un texte"""
+        ...
+
+    @abstractmethod
+    def analyze_batch(self, texts: List[str]) -> List[Dict[str, Any]]:
+        """Analyse le sentiment de plusieurs textes"""
+        ...
+
+
+# === RISK INTERFACE ===
+
+@dataclass
+class OrderRequest:
+    """Requête d'ordre à valider"""
+    symbol: str
+    side: str
+    amount: float
+    price: Optional[float] = None
+    order_type: str = "market"
+
+
+@dataclass
+class RiskCheckResult:
+    """Résultat d'une validation de risque"""
+    approved: bool
+    adjusted_amount: Optional[float] = None
+    reason: str = ""
+    warnings: List[str] = None
+
+    def __post_init__(self):
+        if self.warnings is None:
+            self.warnings = []
+
+
+class BaseRiskManager(ABC):
+    """
+    Interface pour le gestionnaire de risque.
+    Permet de définir des règles custom ou de swapper l'implémentation.
+    """
+
+    @abstractmethod
+    def check_order(
+        self,
+        order: OrderRequest,
+        portfolio_state: Dict[str, Any],
+        market_state: Dict[str, Any],
+    ) -> RiskCheckResult:
+        """Vérifie si un ordre respecte les règles de risque"""
+        ...
+
+    @abstractmethod
+    def get_constraints(self) -> Dict[str, Any]:
+        """Retourne les contraintes de risque actuelles"""
+        ...
+
+    @abstractmethod
+    def update_daily_stats(self, pnl: float) -> None:
+        """Met à jour les stats journalières (PnL, trades, etc.)"""
+        ...
+
+    @abstractmethod
+    def should_halt(self) -> bool:
+        """Indique si le trading doit être arrêté (daily loss, etc.)"""
+        ...
+
+
+# === PERSISTENCE INTERFACE ===
+
+class BaseMemory(ABC):
+    """
+    Interface pour la persistance des données.
+    Permet de swapper SQLite ↔ PostgreSQL ↔ Redis.
+    """
+
+    @abstractmethod
+    def log(self, level: str, message: str, context: Optional[Dict] = None) -> None:
+        """Log un message"""
+        ...
+
+    @abstractmethod
+    def log_trade_open(self, order: Dict, snapshot: Dict, action: Dict) -> int:
+        """Enregistre l'ouverture d'un trade, retourne l'ID"""
+        ...
+
+    @abstractmethod
+    def log_trade_close(self, trade_id: int, order: Dict, pnl: float) -> None:
+        """Enregistre la fermeture d'un trade"""
+        ...
+
+    @abstractmethod
+    def get_open_trades(self) -> List[Dict]:
+        """Retourne les trades ouverts"""
+        ...
+
+    @abstractmethod
+    def get_daily_pnl(self) -> float:
+        """Retourne le PnL du jour"""
+        ...
+
+
+# === TOOL INTERFACE ===
+
+@dataclass
+class ToolDefinition:
+    """Définition d'un tool pour le LLM"""
+    name: str
+    description: str
+    parameters: Dict[str, Any]
+    category: str  # "observer", "reflechir", "agir"
+
+
+class BaseTool(ABC):
+    """
+    Interface pour un tool appelable par le LLM.
+    Permet d'ajouter facilement de nouveaux tools.
+    """
+
+    @property
+    @abstractmethod
+    def definition(self) -> ToolDefinition:
+        """Retourne la définition du tool pour le LLM"""
+        ...
+
+    @abstractmethod
+    async def execute(self, **kwargs) -> Dict[str, Any]:
+        """Exécute le tool avec les arguments fournis"""
+        ...
+```
+
+**Critères de validation**:
+- [ ] Toutes les interfaces ABC définies
+- [ ] Dataclasses pour les structures de données
+- [ ] Documentation claire de chaque méthode
+- [ ] Typage strict
+
+---
+
+### T0.6.2 - Créer le registre de tools (Plugin System)
+**Priorité**: HAUTE
+**Estimation**: Moyenne
+
+Créer `src/tools/registry.py` pour enregistrer dynamiquement les tools :
+
+```python
+"""
+Registre de tools - système de plugins.
+Permet d'ajouter/retirer des tools dynamiquement.
+"""
+
+from typing import Dict, List, Optional, Type
+from src.interfaces import BaseTool, ToolDefinition
+
+
+class ToolRegistry:
+    """
+    Registre central pour tous les tools du bot.
+    Pattern Singleton avec enregistrement dynamique.
+    """
+
+    _instance: Optional["ToolRegistry"] = None
+    _tools: Dict[str, BaseTool] = {}
+
+    def __new__(cls) -> "ToolRegistry":
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._tools = {}
+        return cls._instance
+
+    def register(self, tool: BaseTool) -> None:
+        """Enregistre un tool dans le registre"""
+        name = tool.definition.name
+        if name in self._tools:
+            raise ValueError(f"Tool '{name}' déjà enregistré")
+        self._tools[name] = tool
+
+    def unregister(self, name: str) -> None:
+        """Retire un tool du registre"""
+        if name in self._tools:
+            del self._tools[name]
+
+    def get(self, name: str) -> Optional[BaseTool]:
+        """Récupère un tool par son nom"""
+        return self._tools.get(name)
+
+    def get_all(self) -> List[BaseTool]:
+        """Retourne tous les tools enregistrés"""
+        return list(self._tools.values())
+
+    def get_by_category(self, category: str) -> List[BaseTool]:
+        """Retourne les tools d'une catégorie (observer, reflechir, agir)"""
+        return [
+            tool for tool in self._tools.values()
+            if tool.definition.category == category
+        ]
+
+    def get_schemas(self) -> List[Dict]:
+        """Retourne les schemas JSON de tous les tools pour le LLM"""
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": tool.definition.name,
+                    "description": tool.definition.description,
+                    "parameters": tool.definition.parameters,
+                },
+            }
+            for tool in self._tools.values()
+        ]
+
+    async def execute(self, name: str, **kwargs) -> Dict:
+        """Exécute un tool par son nom"""
+        tool = self.get(name)
+        if tool is None:
+            return {"error": f"Tool '{name}' non trouvé"}
+        try:
+            return await tool.execute(**kwargs)
+        except Exception as e:
+            return {"error": str(e)}
+
+    def clear(self) -> None:
+        """Vide le registre (utile pour les tests)"""
+        self._tools.clear()
+
+
+# Singleton global
+_registry: Optional[ToolRegistry] = None
+
+
+def get_tool_registry() -> ToolRegistry:
+    """Retourne le registre singleton"""
+    global _registry
+    if _registry is None:
+        _registry = ToolRegistry()
+    return _registry
+
+
+# Décorateur pour enregistrer un tool facilement
+def register_tool(cls: Type[BaseTool]) -> Type[BaseTool]:
+    """
+    Décorateur pour auto-enregistrer un tool.
+
+    Usage:
+        @register_tool
+        class MyTool(BaseTool):
+            ...
+    """
+    instance = cls()
+    get_tool_registry().register(instance)
+    return cls
+```
+
+**Critères de validation**:
+- [ ] Pattern singleton fonctionnel
+- [ ] Méthodes CRUD pour les tools
+- [ ] Décorateur pour auto-enregistrement
+- [ ] Génération des schemas JSON
+- [ ] Tests unitaires
+
+---
+
+### T0.6.3 - Créer le conteneur d'injection de dépendances
+**Priorité**: HAUTE
+**Estimation**: Moyenne
+
+Créer `src/container.py` pour l'injection de dépendances :
+
+```python
+"""
+Conteneur d'injection de dépendances.
+Permet de configurer et swapper les implémentations facilement.
+"""
+
+from typing import Dict, Any, Optional, Type, TypeVar
+from dataclasses import dataclass, field
+
+from src.interfaces import (
+    BaseExchange,
+    BaseLLMAdapter,
+    BaseTrendsProvider,
+    BaseNewsProvider,
+    BaseSentimentAnalyzer,
+    BaseRiskManager,
+    BaseMemory,
+)
+
+T = TypeVar("T")
+
+
+@dataclass
+class Container:
+    """
+    Conteneur IoC (Inversion of Control).
+    Centralise toutes les dépendances du bot.
+    """
+
+    # Instances des composants
+    exchange: Optional[BaseExchange] = None
+    llm: Optional[BaseLLMAdapter] = None
+    trends_provider: Optional[BaseTrendsProvider] = None
+    news_provider: Optional[BaseNewsProvider] = None
+    sentiment_analyzer: Optional[BaseSentimentAnalyzer] = None
+    risk_manager: Optional[BaseRiskManager] = None
+    memory: Optional[BaseMemory] = None
+
+    # Factories pour lazy initialization
+    _factories: Dict[str, callable] = field(default_factory=dict)
+
+    def register_factory(self, name: str, factory: callable) -> None:
+        """Enregistre une factory pour création lazy"""
+        self._factories[name] = factory
+
+    def get_or_create(self, name: str) -> Any:
+        """Récupère ou crée une instance via factory"""
+        current = getattr(self, name, None)
+        if current is not None:
+            return current
+
+        factory = self._factories.get(name)
+        if factory is None:
+            raise ValueError(f"Pas de factory pour '{name}'")
+
+        instance = factory()
+        setattr(self, name, instance)
+        return instance
+
+    def validate(self) -> bool:
+        """Vérifie que toutes les dépendances requises sont configurées"""
+        required = ["exchange", "llm", "risk_manager", "memory"]
+        missing = [
+            name for name in required
+            if getattr(self, name, None) is None and name not in self._factories
+        ]
+        if missing:
+            raise ValueError(f"Dépendances manquantes: {missing}")
+        return True
+
+
+# Singleton global
+_container: Optional[Container] = None
+
+
+def get_container() -> Container:
+    """Retourne le conteneur singleton"""
+    global _container
+    if _container is None:
+        _container = Container()
+    return _container
+
+
+def configure_container(
+    exchange: Optional[BaseExchange] = None,
+    llm: Optional[BaseLLMAdapter] = None,
+    trends_provider: Optional[BaseTrendsProvider] = None,
+    news_provider: Optional[BaseNewsProvider] = None,
+    sentiment_analyzer: Optional[BaseSentimentAnalyzer] = None,
+    risk_manager: Optional[BaseRiskManager] = None,
+    memory: Optional[BaseMemory] = None,
+) -> Container:
+    """
+    Configure le conteneur avec les implémentations.
+
+    Usage:
+        from src.container import configure_container
+        from src.tools.market import MEXCExchange
+        from src.client.groq_adapter import GroqAdapter
+
+        configure_container(
+            exchange=MEXCExchange(),
+            llm=GroqAdapter(api_key=..., model=...),
+            ...
+        )
+    """
+    container = get_container()
+    if exchange:
+        container.exchange = exchange
+    if llm:
+        container.llm = llm
+    if trends_provider:
+        container.trends_provider = trends_provider
+    if news_provider:
+        container.news_provider = news_provider
+    if sentiment_analyzer:
+        container.sentiment_analyzer = sentiment_analyzer
+    if risk_manager:
+        container.risk_manager = risk_manager
+    if memory:
+        container.memory = memory
+    return container
+
+
+def reset_container() -> None:
+    """Reset le conteneur (utile pour les tests)"""
+    global _container
+    _container = None
+```
+
+**Critères de validation**:
+- [ ] Pattern IoC fonctionnel
+- [ ] Support des factories lazy
+- [ ] Validation des dépendances requises
+- [ ] Fonction de configuration facile
+- [ ] Reset pour les tests
+
+---
+
+### T0.6.4 - Adapter main.py pour l'injection de dépendances
+**Priorité**: HAUTE
+**Estimation**: Simple
+
+Modifier `main.py` pour utiliser le conteneur :
+
+```python
+#!/usr/bin/env python3
+"""
+OtterTrend - Bot de Trading Autonome SocialFi/Crypto
+Point d'entrée principal avec injection de dépendances.
+"""
+
+import asyncio
+import sys
+from dotenv import load_dotenv
+
+from src.config import get_config
+from src.container import configure_container, get_container
+
+# Implémentations concrètes (facilement swappables)
+from src.client.groq_adapter import GroqAdapter
+from src.tools.market import MEXCExchange, PaperExchange
+from src.tools.trends import GoogleTrendsProvider
+from src.tools.news import CryptoCompareProvider
+from src.tools.sentiment import RuleBasedSentiment
+from src.tools.risk import DefaultRiskManager
+from src.bot.memory import SQLiteMemory
+from src.bot.loop import TradingBotLoop
+from src.ui.renderer import Renderer
+
+SYSTEM_PROMPT = """..."""  # Inchangé
+
+
+def setup_container() -> None:
+    """
+    Configure le conteneur avec les implémentations.
+    Modifiez cette fonction pour swapper les composants.
+    """
+    cfg = get_config()
+
+    # Exchange: MEXC ou Paper selon config
+    if cfg.paper_trading:
+        exchange = PaperExchange(initial_balance=1000.0)
+    else:
+        exchange = MEXCExchange()
+
+    # LLM: Groq (peut être swappé pour OpenAI, etc.)
+    llm = GroqAdapter(
+        api_key=cfg.groq_api_key,
+        model=cfg.llm_model,
+        system_prompt=SYSTEM_PROMPT,
+    )
+
+    # Data providers
+    trends = GoogleTrendsProvider()
+    news = CryptoCompareProvider()
+    sentiment = RuleBasedSentiment()
+
+    # Risk & Memory
+    risk = DefaultRiskManager(cfg)
+    memory = SQLiteMemory(db_path="bot_data.db")
+
+    # Configuration du conteneur
+    configure_container(
+        exchange=exchange,
+        llm=llm,
+        trends_provider=trends,
+        news_provider=news,
+        sentiment_analyzer=sentiment,
+        risk_manager=risk,
+        memory=memory,
+    )
+
+
+async def main() -> int:
+    load_dotenv()
+    cfg = get_config()
+
+    # Validation de base
+    if not cfg.groq_api_key:
+        print("[ERROR] GROQ_API_KEY manquant dans .env")
+        return 1
+
+    # Setup du conteneur IoC
+    setup_container()
+    container = get_container()
+    container.validate()
+
+    print(f"[INFO] Démarrage OtterTrend")
+    print(f"[INFO] Mode: {'PAPER' if cfg.paper_trading else 'LIVE'}")
+    print(f"[INFO] Exchange: {container.exchange.name}")
+    print(f"[INFO] LLM: {container.llm.get_model_info()['name']}")
+
+    # Boucle principale avec dépendances injectées
+    renderer = Renderer()
+    bot_loop = TradingBotLoop(container=container, renderer=renderer)
+
+    try:
+        await bot_loop.run_forever(interval_seconds=cfg.loop_interval_seconds)
+    except KeyboardInterrupt:
+        print("\n[INFO] Arrêt demandé")
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(asyncio.run(main()))
+```
+
+**Critères de validation**:
+- [ ] Setup du conteneur centralisé
+- [ ] Composants facilement swappables
+- [ ] Validation au démarrage
+- [ ] Logs informatifs sur les composants utilisés

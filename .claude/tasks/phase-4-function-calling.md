@@ -977,3 +977,377 @@ class TestToolRouter:
 - Cache pour données qui changent peu
 - Batch les appels quand possible
 - Timeout sur les tools longs
+
+---
+
+## T4.6 - Architecture Modulaire Tools (Plugin System)
+
+> **Objectif**: Assurer que les tools sont modulaires et extensibles.
+> Chaque tool implémente `BaseTool` et peut être ajouté/retiré dynamiquement.
+
+### T4.6.1 - Implémenter des Tools avec l'interface BaseTool
+**Priorité**: HAUTE
+**Estimation**: Moyenne
+
+Modifier les tools pour implémenter l'interface `BaseTool` définie dans Phase 0 :
+
+```python
+"""
+Exemple d'implémentation d'un tool modulaire.
+Tous les tools doivent suivre ce pattern.
+"""
+
+from typing import Any, Dict
+from src.interfaces import BaseTool, ToolDefinition
+from src.tools.registry import register_tool
+
+
+@register_tool
+class GetMarketPriceTool(BaseTool):
+    """
+    Tool modulaire pour récupérer le prix d'un symbole.
+    S'enregistre automatiquement grâce au décorateur.
+    """
+
+    def __init__(self) -> None:
+        self._exchange = None  # Lazy loading
+
+    @property
+    def definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name="get_market_price",
+            description="Get the current spot price for a trading pair",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "symbol": {
+                        "type": "string",
+                        "description": "Trading pair (e.g., 'BTC/USDT')",
+                    },
+                },
+                "required": ["symbol"],
+            },
+            category="observer",
+        )
+
+    async def execute(self, symbol: str) -> Dict[str, Any]:
+        """Exécute le tool"""
+        from src.container import get_container
+        exchange = get_container().exchange
+        price = await exchange.get_ticker(symbol)
+        return {"symbol": symbol, "price": price["last"]}
+
+
+@register_tool
+class PlaceOrderTool(BaseTool):
+    """
+    Tool modulaire pour placer un ordre.
+    Intègre automatiquement la validation de risque.
+    """
+
+    @property
+    def definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name="place_order",
+            description="Place a market order (validated by risk manager)",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "symbol": {"type": "string"},
+                    "side": {"type": "string", "enum": ["buy", "sell"]},
+                    "amount_usd": {"type": "number"},
+                },
+                "required": ["symbol", "side", "amount_usd"],
+            },
+            category="agir",
+        )
+
+    async def execute(
+        self, symbol: str, side: str, amount_usd: float
+    ) -> Dict[str, Any]:
+        """Exécute avec validation de risque"""
+        from src.container import get_container
+        from src.interfaces import OrderRequest
+
+        container = get_container()
+        exchange = container.exchange
+        risk_manager = container.risk_manager
+
+        # Portfolio state pour validation
+        balance = await exchange.get_balance()
+        portfolio = {"balance_usdt": balance["free"].get("USDT", 0)}
+
+        # Check risk
+        order_request = OrderRequest(
+            symbol=symbol,
+            side=side,
+            amount=amount_usd,
+        )
+        market_state = await exchange.get_ticker(symbol)
+        check = risk_manager.check_order(order_request, portfolio, market_state)
+
+        if not check.approved:
+            return {"executed": False, "reason": check.reason}
+
+        # Execute
+        amount = amount_usd / market_state["last"]
+        order = await exchange.place_order(symbol, side, amount)
+        return {"executed": True, "order": order}
+
+
+@register_tool
+class GetGoogleTrendsTool(BaseTool):
+    """Tool modulaire pour Google Trends"""
+
+    @property
+    def definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name="get_google_trends",
+            description="Get Google Trends interest for keywords",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "keywords": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Keywords to analyze (max 5)",
+                    },
+                },
+                "required": ["keywords"],
+            },
+            category="observer",
+        )
+
+    async def execute(self, keywords: list) -> Dict[str, Any]:
+        from src.container import get_container
+        provider = get_container().trends_provider
+        return await provider.get_interest_over_time(keywords[:5])
+```
+
+**Critères de validation**:
+- [ ] Tous les tools implémentent BaseTool
+- [ ] Auto-enregistrement via décorateur
+- [ ] Catégories correctes (observer/reflechir/agir)
+- [ ] Documentation des paramètres
+
+---
+
+### T4.6.2 - Modifier le ToolRouter pour utiliser le registre
+**Priorité**: HAUTE
+**Estimation**: Simple
+
+```python
+"""
+ToolRouter modulaire utilisant le registre de tools.
+"""
+
+from typing import Any, Dict
+from src.tools.registry import get_tool_registry
+
+
+class ModularToolRouter:
+    """
+    Router utilisant le registre de tools.
+    Plus besoin de hardcoder les handlers!
+    """
+
+    def __init__(self) -> None:
+        self._registry = get_tool_registry()
+
+    async def execute(
+        self,
+        tool_name: str,
+        arguments: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Exécute un tool via le registre.
+        """
+        tool = self._registry.get(tool_name)
+        if tool is None:
+            return {
+                "success": False,
+                "error": f"Tool '{tool_name}' non trouvé",
+                "available_tools": [t.definition.name for t in self._registry.get_all()],
+            }
+
+        try:
+            result = await tool.execute(**arguments)
+            return {"success": True, "result": result}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def get_schemas(self) -> list:
+        """Retourne les schemas pour le LLM"""
+        return self._registry.get_schemas()
+
+    def get_tools_by_category(self, category: str) -> list:
+        """Retourne les tools d'une catégorie"""
+        return self._registry.get_by_category(category)
+
+    def list_tools(self) -> Dict[str, list]:
+        """Liste les tools par catégorie"""
+        return {
+            "observer": [t.definition.name for t in self.get_tools_by_category("observer")],
+            "reflechir": [t.definition.name for t in self.get_tools_by_category("reflechir")],
+            "agir": [t.definition.name for t in self.get_tools_by_category("agir")],
+        }
+```
+
+**Critères de validation**:
+- [ ] Utilise le registre de tools
+- [ ] Plus de handlers hardcodés
+- [ ] Schemas générés automatiquement
+- [ ] Filtrage par catégorie
+
+---
+
+### T4.6.3 - Ajouter un nouveau tool (exemple de modularité)
+**Priorité**: MOYENNE
+**Estimation**: Simple
+
+Exemple montrant comment ajouter un nouveau tool sans modifier le router :
+
+```python
+"""
+Nouveau tool custom - exemple de modularité.
+Il suffit de créer une classe, elle sera auto-enregistrée.
+"""
+
+from src.interfaces import BaseTool, ToolDefinition
+from src.tools.registry import register_tool
+
+
+@register_tool
+class GetFearGreedIndexTool(BaseTool):
+    """
+    Tool custom pour récupérer le Fear & Greed Index.
+    Démontre l'extensibilité du système.
+    """
+
+    @property
+    def definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name="get_fear_greed_index",
+            description="Get the current Crypto Fear & Greed Index (0-100)",
+            parameters={
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+            category="observer",
+        )
+
+    async def execute(self) -> Dict[str, Any]:
+        """Fetch le Fear & Greed Index depuis l'API alternative.me"""
+        import aiohttp
+
+        url = "https://api.alternative.me/fng/"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as resp:
+                data = await resp.json()
+
+        if data.get("data"):
+            fng = data["data"][0]
+            return {
+                "value": int(fng["value"]),
+                "classification": fng["value_classification"],
+                "timestamp": fng["timestamp"],
+            }
+        return {"error": "Failed to fetch Fear & Greed Index"}
+```
+
+**Comment ajouter un nouveau tool:**
+1. Créer une classe qui hérite de `BaseTool`
+2. Ajouter le décorateur `@register_tool`
+3. Définir `definition` (nom, description, paramètres, catégorie)
+4. Implémenter `execute(**kwargs)`
+5. C'est tout! Le tool est automatiquement disponible.
+
+**Critères de validation**:
+- [ ] Nouveau tool fonctionnel
+- [ ] Pas de modification du router
+- [ ] Auto-enregistré au démarrage
+- [ ] Visible dans les schemas LLM
+
+---
+
+### T4.6.4 - Configuration des tools activés
+**Priorité**: BASSE
+**Estimation**: Simple
+
+```python
+"""
+Configuration pour activer/désactiver des tools.
+Permet de contrôler quels tools sont disponibles pour le LLM.
+"""
+
+from typing import List, Optional
+from src.config import get_config
+
+
+class ToolConfig:
+    """Configuration des tools activés"""
+
+    def __init__(self) -> None:
+        self._enabled: Optional[List[str]] = None
+        self._disabled: List[str] = []
+
+    def enable_only(self, tool_names: List[str]) -> None:
+        """Active uniquement les tools spécifiés"""
+        self._enabled = tool_names
+
+    def disable(self, tool_names: List[str]) -> None:
+        """Désactive les tools spécifiés"""
+        self._disabled.extend(tool_names)
+
+    def is_enabled(self, tool_name: str) -> bool:
+        """Vérifie si un tool est activé"""
+        if self._enabled is not None:
+            return tool_name in self._enabled
+        return tool_name not in self._disabled
+
+
+# Usage dans le router
+class ConfigurableToolRouter(ModularToolRouter):
+    """Router avec support de configuration"""
+
+    def __init__(self, config: Optional[ToolConfig] = None) -> None:
+        super().__init__()
+        self._config = config or ToolConfig()
+
+    def get_schemas(self) -> list:
+        """Retourne uniquement les schemas des tools activés"""
+        all_schemas = super().get_schemas()
+        return [
+            s for s in all_schemas
+            if self._config.is_enabled(s["function"]["name"])
+        ]
+
+    async def execute(self, tool_name: str, arguments: dict) -> dict:
+        """Vérifie si le tool est activé avant exécution"""
+        if not self._config.is_enabled(tool_name):
+            return {
+                "success": False,
+                "error": f"Tool '{tool_name}' est désactivé",
+            }
+        return await super().execute(tool_name, arguments)
+
+
+# Configuration via .env (optionnel)
+def load_tool_config() -> ToolConfig:
+    """Charge la config des tools depuis l'environnement"""
+    import os
+    config = ToolConfig()
+
+    disabled = os.getenv("DISABLED_TOOLS", "")
+    if disabled:
+        config.disable(disabled.split(","))
+
+    return config
+```
+
+**Critères de validation**:
+- [ ] Activation/désactivation par tool
+- [ ] Config via environnement
+- [ ] Schemas filtrés pour LLM
+- [ ] Exécution bloquée si désactivé

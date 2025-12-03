@@ -812,3 +812,431 @@ def compute_market_analytics(prices: List[float]) -> Dict[str, any]:
 - Cache des résultats Google Trends (TTL: 5min)
 - Fetch parallèle pour news multi-symboles
 - Limiter le nombre de keywords à 5 par requête
+
+---
+
+## T2.6 - Architecture Modulaire Data Providers
+
+> **Objectif**: Assurer que tous les providers de données implémentent les interfaces abstraites.
+> Permet de swapper Google Trends ↔ Autre source, CryptoCompare ↔ CoinGecko, etc.
+
+### T2.6.1 - Implémenter GoogleTrendsProvider (BaseTrendsProvider)
+**Priorité**: HAUTE
+**Estimation**: Simple
+
+Modifier `src/tools/trends.py` pour implémenter l'interface :
+
+```python
+"""
+Implémentation Google Trends de BaseTrendsProvider.
+Modulaire et swappable avec d'autres sources de tendances.
+"""
+
+from typing import Any, Dict, List
+from src.interfaces import BaseTrendsProvider
+from pytrends.request import TrendReq
+
+
+class GoogleTrendsProvider(BaseTrendsProvider):
+    """
+    Implémentation concrète de BaseTrendsProvider pour Google Trends.
+
+    Limitations:
+    - Max 5 keywords par requête
+    - Rate limiting non officiel (risque de blocage)
+    - Données relatives, pas absolues
+    """
+
+    def __init__(
+        self,
+        hl: str = "en-US",
+        tz: int = 0,
+        timeout: tuple = (10, 25),
+    ) -> None:
+        self._hl = hl
+        self._tz = tz
+        self._timeout = timeout
+        self._client: Optional[TrendReq] = None
+
+    @property
+    def name(self) -> str:
+        return "google_trends"
+
+    def _get_client(self) -> TrendReq:
+        """Lazy initialization du client PyTrends"""
+        if self._client is None:
+            self._client = TrendReq(
+                hl=self._hl,
+                tz=self._tz,
+                timeout=self._timeout,
+                retries=2,
+                backoff_factor=0.5,
+            )
+        return self._client
+
+    async def get_interest_over_time(
+        self,
+        keywords: List[str],
+        timeframe: str = "now 7-d",
+    ) -> Dict[str, Any]:
+        """Implémente BaseTrendsProvider.get_interest_over_time"""
+        import asyncio
+        loop = asyncio.get_running_loop()
+
+        def _fetch():
+            client = self._get_client()
+            client.build_payload(keywords[:5], timeframe=timeframe)
+            return client.interest_over_time()
+
+        try:
+            df = await loop.run_in_executor(None, _fetch)
+        except Exception as e:
+            return {"error": str(e), "keywords": keywords}
+
+        if df.empty:
+            return {kw: {"current": 0, "trend": "unknown"} for kw in keywords}
+
+        result = {}
+        for kw in keywords:
+            if kw not in df.columns:
+                result[kw] = {"current": 0, "trend": "unknown"}
+                continue
+
+            series = df[kw].tolist()
+            current = series[-1] if series else 0
+            avg = sum(series) / len(series) if series else 0
+
+            # Calcul de la tendance
+            if len(series) >= 2:
+                recent = sum(series[-3:]) / min(3, len(series))
+                old = sum(series[:3]) / min(3, len(series))
+                if recent > old * 1.1:
+                    trend = "rising"
+                elif recent < old * 0.9:
+                    trend = "falling"
+                else:
+                    trend = "stable"
+            else:
+                trend = "unknown"
+
+            result[kw] = {
+                "current": int(current),
+                "avg": round(avg, 1),
+                "trend": trend,
+                "series": series[-20:],
+            }
+
+        return result
+
+    async def get_related_queries(self, keyword: str) -> Dict[str, List[str]]:
+        """Implémente BaseTrendsProvider.get_related_queries"""
+        import asyncio
+        loop = asyncio.get_running_loop()
+
+        def _fetch():
+            client = self._get_client()
+            client.build_payload([keyword])
+            return client.related_queries()
+
+        try:
+            data = await loop.run_in_executor(None, _fetch)
+        except Exception as e:
+            return {"error": str(e), "rising": [], "top": []}
+
+        result = {"rising": [], "top": []}
+        if keyword in data:
+            kw_data = data[keyword]
+            if "rising" in kw_data and kw_data["rising"] is not None:
+                result["rising"] = kw_data["rising"]["query"].tolist()[:10]
+            if "top" in kw_data and kw_data["top"] is not None:
+                result["top"] = kw_data["top"]["query"].tolist()[:10]
+
+        return result
+```
+
+**Critères de validation**:
+- [ ] Implémente toutes les méthodes de BaseTrendsProvider
+- [ ] Calcul de tendance correct
+- [ ] Gestion des erreurs
+- [ ] Tests avec données réelles
+
+---
+
+### T2.6.2 - Implémenter CryptoCompareProvider (BaseNewsProvider)
+**Priorité**: HAUTE
+**Estimation**: Simple
+
+```python
+"""
+Implémentation CryptoCompare de BaseNewsProvider.
+"""
+
+from typing import Any, Dict, List
+from datetime import datetime
+import requests
+import asyncio
+
+from src.interfaces import BaseNewsProvider
+
+
+class CryptoCompareProvider(BaseNewsProvider):
+    """
+    Implémentation concrète de BaseNewsProvider pour CryptoCompare.
+
+    Avantages:
+    - API gratuite, pas de clé requise
+    - Agrège plusieurs sources
+    - Mise à jour fréquente
+    """
+
+    def __init__(self) -> None:
+        self._session = requests.Session()
+        self._session.headers.update({"User-Agent": "OtterTrend/1.0"})
+        self._base_url = "https://min-api.cryptocompare.com/data/v2/news/"
+
+    @property
+    def name(self) -> str:
+        return "cryptocompare"
+
+    async def get_news(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """Implémente BaseNewsProvider.get_news"""
+        loop = asyncio.get_running_loop()
+
+        def _fetch():
+            resp = self._session.get(
+                self._base_url,
+                params={"lang": "EN"},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            return resp.json().get("Data", [])[:limit]
+
+        try:
+            raw_news = await loop.run_in_executor(None, _fetch)
+        except Exception:
+            return []
+
+        return [
+            {
+                "title": item.get("title", ""),
+                "body": item.get("body", "")[:500],
+                "source": item.get("source_info", {}).get("name", "unknown"),
+                "url": item.get("url", ""),
+                "published_at": datetime.fromtimestamp(
+                    item.get("published_on", 0)
+                ).isoformat(),
+                "categories": item.get("categories", "").split("|"),
+            }
+            for item in raw_news
+        ]
+
+    async def search_news_by_symbol(
+        self, symbol: str, limit: int = 10
+    ) -> List[Dict[str, Any]]:
+        """Implémente BaseNewsProvider.search_news_by_symbol"""
+        base_asset = symbol.split("/")[0].upper()
+        all_news = await self.get_news(limit=100)
+
+        matching = [
+            item for item in all_news
+            if base_asset in item["title"].upper()
+            or base_asset in item["body"].upper()
+        ][:limit]
+
+        return matching
+```
+
+**Critères de validation**:
+- [ ] Implémente toutes les méthodes de BaseNewsProvider
+- [ ] Normalisation des données
+- [ ] Filtrage par symbole fonctionnel
+- [ ] Tests avec mock HTTP
+
+---
+
+### T2.6.3 - Implémenter RuleBasedSentiment (BaseSentimentAnalyzer)
+**Priorité**: HAUTE
+**Estimation**: Simple
+
+```python
+"""
+Implémentation basée sur règles de BaseSentimentAnalyzer.
+Simple mais efficace pour le domaine crypto.
+"""
+
+from typing import Any, Dict, List
+from src.interfaces import BaseSentimentAnalyzer
+
+
+# Dictionnaires de mots-clés crypto
+POSITIVE_WORDS = [
+    "surge", "rally", "soar", "bullish", "breakout", "ath", "pump",
+    "moon", "gains", "growth", "adoption", "partnership", "launch",
+    "upgrade", "mainnet", "listing", "approval", "institutional",
+]
+
+NEGATIVE_WORDS = [
+    "crash", "dump", "bearish", "plunge", "liquidation", "hack",
+    "exploit", "scam", "rug", "fraud", "ban", "regulation", "sec",
+    "lawsuit", "delay", "failure", "bug", "vulnerability",
+]
+
+
+class RuleBasedSentiment(BaseSentimentAnalyzer):
+    """
+    Analyseur de sentiment basé sur des règles lexicales.
+
+    Simple mais efficace pour le domaine crypto.
+    Peut être remplacé par FinBERT ou GPT pour plus de précision.
+    """
+
+    def __init__(
+        self,
+        positive_words: List[str] = None,
+        negative_words: List[str] = None,
+    ) -> None:
+        self._positive = positive_words or POSITIVE_WORDS
+        self._negative = negative_words or NEGATIVE_WORDS
+
+    @property
+    def name(self) -> str:
+        return "rule_based"
+
+    def analyze(self, text: str) -> Dict[str, Any]:
+        """Implémente BaseSentimentAnalyzer.analyze"""
+        text_lower = text.lower()
+
+        pos_count = sum(1 for w in self._positive if w in text_lower)
+        neg_count = sum(1 for w in self._negative if w in text_lower)
+
+        total = pos_count + neg_count
+        if total == 0:
+            return {"score": 0.0, "label": "neutral", "confidence": 0.0}
+
+        score = (pos_count - neg_count) / total
+
+        if score > 0.2:
+            label = "positive"
+        elif score < -0.2:
+            label = "negative"
+        else:
+            label = "neutral"
+
+        return {
+            "score": round(score, 2),
+            "label": label,
+            "confidence": min(total / 5, 1.0),  # Plus de mots = plus confiant
+            "positive_count": pos_count,
+            "negative_count": neg_count,
+        }
+
+    def analyze_batch(self, texts: List[str]) -> List[Dict[str, Any]]:
+        """Implémente BaseSentimentAnalyzer.analyze_batch"""
+        return [self.analyze(text) for text in texts]
+
+
+# Alternative future: FinBERT
+class FinBERTSentiment(BaseSentimentAnalyzer):
+    """
+    TODO: Implémenter avec transformers/FinBERT pour production.
+    Plus précis mais plus lent et nécessite GPU.
+    """
+
+    def __init__(self) -> None:
+        raise NotImplementedError("FinBERT non implémenté - utiliser RuleBasedSentiment")
+
+    def analyze(self, text: str) -> Dict[str, Any]:
+        ...
+
+    def analyze_batch(self, texts: List[str]) -> List[Dict[str, Any]]:
+        ...
+```
+
+**Critères de validation**:
+- [ ] Implémente toutes les méthodes de BaseSentimentAnalyzer
+- [ ] Dictionnaires crypto pertinents
+- [ ] Score normalisé [-1, 1]
+- [ ] Placeholder pour FinBERT
+
+---
+
+### T2.6.4 - Factory pour data providers
+**Priorité**: MOYENNE
+**Estimation**: Simple
+
+```python
+"""
+Factories pour créer les providers de données.
+Permet de swapper facilement les implémentations.
+"""
+
+from typing import Dict, Type
+from src.interfaces import BaseTrendsProvider, BaseNewsProvider, BaseSentimentAnalyzer
+
+
+# Registres des providers disponibles
+TRENDS_REGISTRY: Dict[str, Type[BaseTrendsProvider]] = {}
+NEWS_REGISTRY: Dict[str, Type[BaseNewsProvider]] = {}
+SENTIMENT_REGISTRY: Dict[str, Type[BaseSentimentAnalyzer]] = {}
+
+
+def register_trends_provider(name: str):
+    def decorator(cls):
+        TRENDS_REGISTRY[name] = cls
+        return cls
+    return decorator
+
+
+def register_news_provider(name: str):
+    def decorator(cls):
+        NEWS_REGISTRY[name] = cls
+        return cls
+    return decorator
+
+
+def register_sentiment_analyzer(name: str):
+    def decorator(cls):
+        SENTIMENT_REGISTRY[name] = cls
+        return cls
+    return decorator
+
+
+# Enregistrement des implémentations par défaut
+@register_trends_provider("google")
+class GoogleTrendsProvider(BaseTrendsProvider):
+    ...
+
+
+@register_news_provider("cryptocompare")
+class CryptoCompareProvider(BaseNewsProvider):
+    ...
+
+
+@register_sentiment_analyzer("rules")
+class RuleBasedSentiment(BaseSentimentAnalyzer):
+    ...
+
+
+# Factories
+def create_trends_provider(name: str = "google", **kwargs) -> BaseTrendsProvider:
+    if name not in TRENDS_REGISTRY:
+        raise ValueError(f"Trends provider '{name}' non supporté")
+    return TRENDS_REGISTRY[name](**kwargs)
+
+
+def create_news_provider(name: str = "cryptocompare", **kwargs) -> BaseNewsProvider:
+    if name not in NEWS_REGISTRY:
+        raise ValueError(f"News provider '{name}' non supporté")
+    return NEWS_REGISTRY[name](**kwargs)
+
+
+def create_sentiment_analyzer(name: str = "rules", **kwargs) -> BaseSentimentAnalyzer:
+    if name not in SENTIMENT_REGISTRY:
+        raise ValueError(f"Sentiment analyzer '{name}' non supporté")
+    return SENTIMENT_REGISTRY[name](**kwargs)
+```
+
+**Critères de validation**:
+- [ ] Registres extensibles
+- [ ] Factories avec détection automatique
+- [ ] Placeholders pour futures implémentations

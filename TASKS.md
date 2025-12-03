@@ -305,6 +305,109 @@ OtterTrend/
 
 ---
 
+## Architecture Modulaire
+
+> **Principe**: Chaque composant majeur est interchangeable via des interfaces abstraites.
+> Cela permet de swapper facilement l'exchange, le LLM, les providers de données, etc.
+
+### Interfaces Abstraites (Phase 0)
+
+| Interface | Implémentation par défaut | Alternatives possibles |
+|-----------|---------------------------|------------------------|
+| `BaseExchange` | MEXCExchange | BinanceExchange, OKXExchange, PaperExchange |
+| `BaseLLMAdapter` | GroqAdapter | OpenAIAdapter, AnthropicAdapter, LocalLLM |
+| `BaseTrendsProvider` | GoogleTrendsProvider | TwitterTrendsProvider |
+| `BaseNewsProvider` | CryptoCompareProvider | CoinGeckoProvider, RSSProvider |
+| `BaseSentimentAnalyzer` | RuleBasedSentiment | FinBERTSentiment, GPTSentiment |
+| `BaseRiskManager` | DefaultRiskManager | ConservativeRiskManager, AggressiveRiskManager |
+| `BaseMemory` | SQLiteMemory | PostgresMemory, RedisMemory |
+| `BaseTool` | (tous les tools) | Custom tools |
+
+### Patterns de Modularité
+
+1. **Interfaces ABC** (`src/interfaces.py`)
+   - Définit les contrats pour chaque composant
+   - Permet le type-checking et l'IDE support
+
+2. **Container IoC** (`src/container.py`)
+   - Injection de dépendances centralisée
+   - Factories pour création lazy des instances
+
+3. **Registres de Plugins**
+   - `EXCHANGE_REGISTRY` - Exchanges disponibles
+   - `ToolRegistry` - Tools enregistrés dynamiquement
+   - `TRENDS_REGISTRY`, `NEWS_REGISTRY`, `SENTIMENT_REGISTRY`
+
+4. **Pattern Chain of Responsibility** (Risk Rules)
+   - Règles de risque indépendantes et testables
+   - Facile d'ajouter/retirer des règles
+
+### Comment swapper un composant
+
+```python
+from src.container import configure_container
+from src.tools.market import BinanceExchange  # Alternative
+
+# Swapper MEXC → Binance
+configure_container(exchange=BinanceExchange())
+
+# Ou via factory
+from src.tools.market import create_exchange
+exchange = create_exchange("binance")  # Au lieu de "mexc"
+```
+
+### Comment ajouter un nouveau tool
+
+```python
+from src.interfaces import BaseTool, ToolDefinition
+from src.tools.registry import register_tool
+
+@register_tool
+class MyNewTool(BaseTool):
+    @property
+    def definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name="my_new_tool",
+            description="Description pour le LLM",
+            parameters={"type": "object", "properties": {}},
+            category="observer",  # ou "reflechir" ou "agir"
+        )
+
+    async def execute(self, **kwargs) -> Dict:
+        return {"result": "ok"}
+```
+
+### Comment ajouter une règle de risque
+
+```python
+from src.tools.risk import RiskRule, RiskContext, RiskCheckResult
+
+class MyCustomRule(RiskRule):
+    @property
+    def name(self) -> str:
+        return "my_custom_rule"
+
+    def check(self, ctx: RiskContext) -> RiskCheckResult:
+        if ctx.market.get("my_condition"):
+            return RiskCheckResult(approved=False, reason="My rejection reason")
+        return RiskCheckResult(approved=True)
+
+# Usage
+risk_manager.add_rule(MyCustomRule())
+```
+
+### Tâches de Modularité par Phase
+
+| Phase | Tâche | Description |
+|-------|-------|-------------|
+| 0 | T0.6 | Créer les interfaces ABC et le container IoC |
+| 1 | T1.6 | Implémenter MEXCExchange/PaperExchange avec BaseExchange |
+| 2 | T2.6 | Implémenter les providers avec les interfaces |
+| 4 | T4.6 | Système de plugins pour les tools |
+| 5 | T5.6 | Pattern Chain of Responsibility pour les règles de risque |
+
+---
+
 ## Limites de Risque (Hard-coded)
 
 | Limite | Valeur | Description |

@@ -910,3 +910,374 @@ from ccxt.base.errors import (
 
 ### Instruction System Prompt (à ajouter)
 > "Tu trades sur MEXC. Profite des frais extrêmement bas (0% maker) pour capturer des mouvements de prix plus petits (scalping) si la tendance est incertaine. Surveille les nouveaux listings récents car c'est la spécialité de cet exchange."
+
+---
+
+## T1.6 - Architecture Modulaire Exchange
+
+> **Objectif**: Assurer que l'implémentation MEXC respecte l'interface `BaseExchange`.
+> Permet de swapper facilement MEXC ↔ Binance ↔ OKX ↔ Paper Trading.
+
+### T1.6.1 - Implémenter MEXCExchange (BaseExchange)
+**Priorité**: CRITIQUE
+**Estimation**: Moyenne
+
+Modifier `src/tools/market.py` pour implémenter l'interface :
+
+```python
+"""
+Implémentation MEXC de l'interface BaseExchange.
+Modulaire et swappable avec d'autres exchanges.
+"""
+
+from typing import Any, Dict, List, Optional
+import ccxt.async_support as ccxt
+
+from src.interfaces import BaseExchange
+from src.config import get_config
+
+
+class MEXCExchange(BaseExchange):
+    """
+    Implémentation concrète de BaseExchange pour MEXC.
+
+    Caractéristiques MEXC:
+    - Frais: 0% maker / 0.01% taker
+    - Pas de passphrase (contrairement à OKX)
+    - Listings très rapides (tokens SocialFi)
+    - Rate limits plus stricts
+    """
+
+    def __init__(self) -> None:
+        self._exchange: Optional[ccxt.Exchange] = None
+        self._config = get_config()
+
+    @property
+    def name(self) -> str:
+        return "mexc"
+
+    @property
+    def fees(self) -> Dict[str, float]:
+        return {"maker": 0.0, "taker": 0.0001}  # 0% / 0.01%
+
+    def _get_exchange(self) -> ccxt.Exchange:
+        """Lazy initialization de l'exchange CCXT"""
+        if self._exchange is None:
+            self._exchange = ccxt.mexc({
+                "apiKey": self._config.mexc_api_key,
+                "secret": self._config.mexc_api_secret,
+                "enableRateLimit": True,
+                "options": {
+                    "defaultType": "spot",
+                    "recvWindow": 60000,
+                },
+            })
+        return self._exchange
+
+    async def get_ticker(self, symbol: str) -> Dict[str, Any]:
+        """Implémente BaseExchange.get_ticker"""
+        ticker = await self._get_exchange().fetch_ticker(symbol)
+        return {
+            "symbol": symbol,
+            "last": float(ticker["last"]),
+            "bid": float(ticker.get("bid", 0)),
+            "ask": float(ticker.get("ask", 0)),
+            "volume_24h": float(ticker.get("baseVolume", 0)),
+            "change_24h_pct": float(ticker.get("percentage", 0)),
+        }
+
+    async def get_tickers(self, symbols: List[str]) -> Dict[str, Dict]:
+        """Implémente BaseExchange.get_tickers"""
+        tickers = await self._get_exchange().fetch_tickers(symbols)
+        return {
+            sym: {
+                "last": float(data["last"]),
+                "volume_24h": float(data.get("baseVolume", 0)),
+                "change_24h_pct": float(data.get("percentage", 0)),
+            }
+            for sym, data in tickers.items()
+        }
+
+    async def get_orderbook(self, symbol: str, depth: int = 20) -> Dict[str, Any]:
+        """Implémente BaseExchange.get_orderbook"""
+        ob = await self._get_exchange().fetch_order_book(symbol, depth)
+        best_bid = float(ob["bids"][0][0]) if ob["bids"] else 0
+        best_ask = float(ob["asks"][0][0]) if ob["asks"] else 0
+        mid = (best_bid + best_ask) / 2 if (best_bid and best_ask) else 0
+        spread_pct = ((best_ask - best_bid) / mid * 100) if mid else 0
+
+        return {
+            "symbol": symbol,
+            "bids": ob["bids"][:depth],
+            "asks": ob["asks"][:depth],
+            "best_bid": best_bid,
+            "best_ask": best_ask,
+            "mid_price": mid,
+            "spread_pct": round(spread_pct, 4),
+        }
+
+    async def get_balance(self) -> Dict[str, Any]:
+        """Implémente BaseExchange.get_balance"""
+        balance = await self._get_exchange().fetch_balance()
+        return {
+            "total": {k: float(v) for k, v in balance["total"].items() if v > 0},
+            "free": {k: float(v) for k, v in balance["free"].items() if v > 0},
+            "used": {k: float(v) for k, v in balance["used"].items() if v > 0},
+        }
+
+    async def place_order(
+        self,
+        symbol: str,
+        side: str,
+        amount: float,
+        order_type: str = "market",
+        price: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Implémente BaseExchange.place_order"""
+        exchange = self._get_exchange()
+
+        if order_type == "market":
+            order = await exchange.create_market_order(symbol, side, amount)
+        elif order_type == "limit":
+            if price is None:
+                raise ValueError("Prix requis pour ordre limit")
+            order = await exchange.create_limit_order(symbol, side, amount, price)
+        else:
+            raise ValueError(f"Type d'ordre non supporté: {order_type}")
+
+        return {
+            "id": order["id"],
+            "symbol": order["symbol"],
+            "side": order["side"],
+            "type": order["type"],
+            "amount": float(order["amount"]),
+            "price": float(order.get("average") or order.get("price") or 0),
+            "status": order["status"],
+            "fee": order.get("fee"),
+        }
+
+    async def cancel_order(self, order_id: str, symbol: str) -> Dict[str, Any]:
+        """Implémente BaseExchange.cancel_order"""
+        try:
+            await self._get_exchange().cancel_order(order_id, symbol)
+            return {"success": True, "order_id": order_id}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    async def close(self) -> None:
+        """Implémente BaseExchange.close"""
+        if self._exchange:
+            await self._exchange.close()
+            self._exchange = None
+```
+
+**Critères de validation**:
+- [ ] Implémente toutes les méthodes de BaseExchange
+- [ ] Propriétés name et fees correctes
+- [ ] Tests avec mock CCXT
+- [ ] Documentation des spécificités MEXC
+
+---
+
+### T1.6.2 - Implémenter PaperExchange (BaseExchange)
+**Priorité**: CRITIQUE
+**Estimation**: Moyenne
+
+```python
+class PaperExchange(BaseExchange):
+    """
+    Implémentation paper trading de BaseExchange.
+    Prix réels via MEXC, ordres simulés en mémoire.
+
+    Permet de tester le bot sans risque réel.
+    Simule les frais MEXC (0% maker / 0.01% taker).
+    """
+
+    def __init__(
+        self,
+        initial_balance: float = 1000.0,
+        real_exchange: Optional[BaseExchange] = None,
+    ) -> None:
+        self._real_exchange = real_exchange or MEXCExchange()
+        self._balance: Dict[str, float] = {"USDT": initial_balance}
+        self._orders: List[Dict] = []
+        self._order_counter = 0
+
+    @property
+    def name(self) -> str:
+        return "paper"
+
+    @property
+    def fees(self) -> Dict[str, float]:
+        # Simule les frais MEXC
+        return {"maker": 0.0, "taker": 0.0001}
+
+    async def get_ticker(self, symbol: str) -> Dict[str, Any]:
+        """Prix réels depuis l'exchange sous-jacent"""
+        return await self._real_exchange.get_ticker(symbol)
+
+    async def get_tickers(self, symbols: List[str]) -> Dict[str, Dict]:
+        """Prix réels depuis l'exchange sous-jacent"""
+        return await self._real_exchange.get_tickers(symbols)
+
+    async def get_orderbook(self, symbol: str, depth: int = 20) -> Dict[str, Any]:
+        """Orderbook réel depuis l'exchange sous-jacent"""
+        return await self._real_exchange.get_orderbook(symbol, depth)
+
+    async def get_balance(self) -> Dict[str, Any]:
+        """Balance simulée"""
+        return {
+            "total": dict(self._balance),
+            "free": dict(self._balance),
+            "used": {},
+        }
+
+    async def place_order(
+        self,
+        symbol: str,
+        side: str,
+        amount: float,
+        order_type: str = "market",
+        price: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Simule un ordre avec prix réels"""
+        base, quote = symbol.split("/")
+
+        # Prix réel
+        if price is None:
+            ticker = await self.get_ticker(symbol)
+            price = ticker["last"]
+
+        cost = amount * price
+        fee_rate = self.fees["taker"] if order_type == "market" else self.fees["maker"]
+
+        if side.lower() == "buy":
+            fee = cost * fee_rate
+            total_cost = cost + fee
+            if total_cost > self._balance.get(quote, 0):
+                raise ValueError(f"Insufficient {quote}")
+            self._balance[quote] = self._balance.get(quote, 0) - total_cost
+            self._balance[base] = self._balance.get(base, 0) + amount
+        else:
+            if amount > self._balance.get(base, 0):
+                raise ValueError(f"Insufficient {base}")
+            revenue = cost * (1 - fee_rate)
+            self._balance[base] = self._balance.get(base, 0) - amount
+            self._balance[quote] = self._balance.get(quote, 0) + revenue
+
+        self._order_counter += 1
+        order = {
+            "id": f"paper_{self._order_counter}",
+            "symbol": symbol,
+            "side": side,
+            "type": order_type,
+            "amount": amount,
+            "price": price,
+            "status": "filled",
+            "fee": {"rate": fee_rate},
+        }
+        self._orders.append(order)
+        return order
+
+    async def cancel_order(self, order_id: str, symbol: str) -> Dict[str, Any]:
+        """Les ordres paper sont toujours remplis immédiatement"""
+        return {"success": False, "error": "Paper orders are filled immediately"}
+
+    async def close(self) -> None:
+        """Ferme l'exchange sous-jacent"""
+        await self._real_exchange.close()
+
+    def get_pnl(self) -> Dict[str, Any]:
+        """Méthode additionnelle pour le paper trading"""
+        return {
+            "total_trades": len(self._orders),
+            "balance": self._balance,
+        }
+```
+
+**Critères de validation**:
+- [ ] Même interface que MEXCExchange
+- [ ] Prix réels, ordres simulés
+- [ ] Simulation correcte des frais
+- [ ] Tests unitaires sans API
+
+---
+
+### T1.6.3 - Factory pour exchanges (Pattern Strategy)
+**Priorité**: HAUTE
+**Estimation**: Simple
+
+```python
+"""
+Factory pour créer le bon exchange selon la config.
+Pattern Strategy pour swapper les implémentations.
+"""
+
+from typing import Optional
+from src.interfaces import BaseExchange
+from src.config import get_config
+
+
+# Registre des exchanges disponibles
+EXCHANGE_REGISTRY: Dict[str, type] = {}
+
+
+def register_exchange(name: str):
+    """Décorateur pour enregistrer un exchange"""
+    def decorator(cls):
+        EXCHANGE_REGISTRY[name] = cls
+        return cls
+    return decorator
+
+
+@register_exchange("mexc")
+class MEXCExchange(BaseExchange):
+    ...  # Voir implémentation ci-dessus
+
+
+@register_exchange("paper")
+class PaperExchange(BaseExchange):
+    ...  # Voir implémentation ci-dessus
+
+
+# Placeholder pour futures implémentations
+@register_exchange("binance")
+class BinanceExchange(BaseExchange):
+    """TODO: Implémenter si besoin de migrer"""
+    ...
+
+
+def create_exchange(
+    exchange_name: Optional[str] = None,
+    **kwargs,
+) -> BaseExchange:
+    """
+    Factory pour créer l'exchange approprié.
+
+    Args:
+        exchange_name: Nom de l'exchange (mexc, paper, binance)
+        **kwargs: Arguments passés au constructeur
+
+    Usage:
+        exchange = create_exchange("mexc")
+        exchange = create_exchange("paper", initial_balance=500)
+    """
+    cfg = get_config()
+
+    # Déterminer l'exchange à utiliser
+    if exchange_name is None:
+        exchange_name = "paper" if cfg.paper_trading else "mexc"
+
+    if exchange_name not in EXCHANGE_REGISTRY:
+        available = list(EXCHANGE_REGISTRY.keys())
+        raise ValueError(f"Exchange '{exchange_name}' non supporté. Disponibles: {available}")
+
+    exchange_cls = EXCHANGE_REGISTRY[exchange_name]
+    return exchange_cls(**kwargs)
+```
+
+**Critères de validation**:
+- [ ] Pattern Strategy fonctionnel
+- [ ] Registre extensible
+- [ ] Factory avec détection automatique
+- [ ] Placeholders pour futures implémentations
