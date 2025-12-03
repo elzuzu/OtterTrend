@@ -1281,3 +1281,85 @@ def create_exchange(
 - [ ] Registre extensible
 - [ ] Factory avec détection automatique
 - [ ] Placeholders pour futures implémentations
+
+---
+
+## T1.7 - Stack réseau « Envoy-like » pour CEX (état 12/2025)
+
+**Objectif**: intégrer nativement les patterns Envoy Proxy 2025 (circuit breaker, hedging, outlier detection, adaptive concurrency) dans la couche réseau Python pour optimiser les appels REST/WebSocket aux CEX et conserver un avantage net sur les autres bots.
+
+### T1.7.1 - Pooling HTTP/2 + keep-alive agressif
+**Priorité**: CRITIQUE  \
+**Estimation**: Moyenne
+
+- Client `ResilientHttpClient` basé sur `httpx.AsyncClient` (`http2=True`, TLS reuse, `trust_env=False`) avec pool préchauffé (2-3 connexions/host), limites `max_keepalive_connections`/`max_connections` configurables et timeouts granulaire <3s.
+- Keep-alive 60-120s, DNS caching 60s, happy-eyeballs (v4/v6) + fallback IPv4 si p95 latence dépasse un seuil ; compression gzip/brotli auto.
+- Hook pour passer ce client dans CCXT (`session=httpx_client`) ou wrapper `aiohttp` avec réglages équivalents.
+
+**Critères de validation**:
+- [ ] HTTP/2 actif et testé (dry-run ou ping API).
+- [ ] Pool préchauffé observable (metrics connexions, taux de réutilisation).
+- [ ] Timeouts/keep-alive paramétrables via `config`.
+
+---
+
+### T1.7.2 - Circuit breaker + retries + hedging
+**Priorité**: CRITIQUE  \
+**Estimation**: Moyenne
+
+- Circuit breaker par route (tickers, orderbook, orders) avec fenêtres 50-100 requêtes; seuil d'échec >20% ou p95>800ms → open 30-60s; demi-ouverture 1-3 probes.
+- Retries idempotents (GET/fetch) max 3 avec backoff exponentiel + jitter (100→800ms) en respectant les budgets rate limit.
+- Request hedging (Envoy 2025): lancer une requête miroir quand la première dépasse un deadline, annuler la plus lente.
+- Outlier detection: score adaptatif pour évincer temporairement endpoints/IP lents ou en 429/5xx; export de l'état breaker/outlier dans les logs.
+- Erreurs typées (enum) propagées au risk manager pour décider d'un ralentissement ou d'un halt partiel.
+
+**Critères de validation**:
+- [ ] Breaker configurable par route + états (closed/open/half-open) visibles dans les traces.
+- [ ] Hedging activable sur `get_tickers`/`fetch_order_book`.
+- [ ] Retries avec jitter et budget respecté.
+
+---
+
+### T1.7.3 - Rate limiting & QoS adaptatif
+**Priorité**: HAUTE  \
+**Estimation**: Moyenne
+
+- Limiteur token-bucket `aiolimiter` multi-niveaux: global, par host, par type (public/private), par symbole ; quotas configurables.
+- File de priorité (orders > account > market bulk) avec temps d'attente borné; load shedding explicite quand la file dépasse le seuil.
+- Adaptive concurrency (pattern Envoy adaptive concurrency 2025): ajuster dynamiquement le nombre de requêtes concurrentes selon la latence glissante et le taux d'erreur.
+- Cooldown automatique après shed pour éviter l'emballement; hooks pour remonter l'état au LLM.
+
+**Critères de validation**:
+- [ ] Budgets rate limit ajustables via `config`.
+- [ ] Priorisation vérifiée via tests concurrents (orders passent en premier).
+- [ ] Concurrency qui s'adapte à la latence observée.
+
+---
+
+### T1.7.4 - Health-checks actifs + failover multi-endpoints
+**Priorité**: HAUTE  \
+**Estimation**: Moyenne
+
+- Sondes actives REST (ping/time) et WebSocket (subscribe minimal) toutes les 10-30s avec seuils configurables.
+- Bascule automatique vers endpoint/region alternatif (ou PaperExchange) en cas d'état « unhealthy » avec cooldown et backoff; blacklist temporaire des IP en erreur; rotation sur DNS multi-A/AAAA.
+- Exposer l'état santé par endpoint dans `get_market_snapshot` et dans les logs.
+
+**Critères de validation**:
+- [ ] Health state visible par le LLM/outils OBSERVER.
+- [ ] Failover validé via scénarios de panne simulés.
+
+---
+
+### T1.7.5 - Observabilité OpenTelemetry (latence/saturation)
+**Priorité**: HAUTE  \
+**Estimation**: Moyenne
+
+- Tracing OpenTelemetry autour des calls CCXT/httpx: attributs endpoint, symbol, status, latence, retries, breaker/hedging state, shed/load.
+- Metrics Prometheus: taux succès/échec, p50/p95 latence, connexions actives, shed rate, pending queue length, breaker opens.
+- Logs JSON corrélés (trace_id/span_id, action LLM) et événements réseau (open/close breaker, failover, shed) ; export OTLP toggle.
+- Dashboard minimal (Grafana/console) décrivant la santé réseau + alertes locales (seuil latence, erreurs 429/5xx, shed).
+
+**Critères de validation**:
+- [ ] Traces exportables (OTLP localhost) avec activation via `config`.
+- [ ] Metrics nommées (`cex_http_latency_ms`, `cex_shed_total`, `cex_breaker_open_total`).
+- [ ] Logs corrélés aux décisions du bot.

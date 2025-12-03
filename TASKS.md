@@ -106,6 +106,11 @@ Phase 0 (Setup)
 | T1.4.3 | Estimation de liquidité | MOYENNE | 🔴 |
 | T1.5.1 | Simulateur Paper Trading | CRITIQUE | 🔴 |
 | T1.5.2 | Factory exchange client | HAUTE | 🔴 |
+| T1.7.1 | Stack réseau "Envoy-like" (HTTP/2, pool, keep-alive) | CRITIQUE | 🔴 |
+| T1.7.2 | Circuit breaker, retries, hedging, outlier detection | CRITIQUE | 🔴 |
+| T1.7.3 | Limiteurs & QoS adaptatifs (token bucket, priorité) | HAUTE | 🔴 |
+| T1.7.4 | Health-checks actifs + failover multi-endpoints | HAUTE | 🔴 |
+| T1.7.5 | Observabilité OpenTelemetry (latence, saturation) | HAUTE | 🔴 |
 
 ---
 
