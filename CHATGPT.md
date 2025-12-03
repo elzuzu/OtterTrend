@@ -6,7 +6,7 @@ Transformer le repository `google-gemini/gemini-cli` (v0.20) en un bot de tradin
 
   * **Interface :** Conserver le front-end CLI (basé sur la librairie `Rich`) pour visualiser le "Chain of Thought" et les appels d'outils en temps réel.
   * **Cerveau :** Remplacer l'API Gemini par **Groq** (Free Tier) via le SDK compatible OpenAI.
-  * **Marché :** Connexion **OKX** via `ccxt`.
+  * **Marché :** Connexion **MEXC** par défaut (paramètre `EXCHANGE_ID`, options futures `bybit`, `okx`) via `ccxt`.
   * **Stratégie :** Analyse de Trend (Google Trends + SocialFi) + Exécution autonome.
   * **Persistance :** `sqlite3`.
 
@@ -17,7 +17,7 @@ Transformer le repository `google-gemini/gemini-cli` (v0.20) en un bot de tradin
   * **Langage :** Python 3.10+
   * **LLM Provider :** Groq Cloud API.
   * **Modèle cible :** `llama-3.3-70b-versatile` (Meilleur rapport raisonnement/vitesse/coût pour le free tier).
-  * **Trading Lib :** `ccxt` (async si possible pour ne pas bloquer l'UI).
+  * **Trading Lib :** `ccxt` (async si possible pour ne pas bloquer l'UI). Ne jamais hardcoder l'exchange : tout passe par `EXCHANGE_ID` + wrapper CCXT.
   * **Trend Lib :** `pytrends` (Google Trends), `requests` (API agrégateurs).
   * **CLI UI :** `rich` (déjà présent dans gemini-cli).
 
@@ -43,6 +43,35 @@ gemini-cli-bot/
 │   └── ui/
 │       └── renderer.py    # Affiche le streaming du "Thought" et les Logs
 ```
+
+### C. Décisions MVP verrouillées (à respecter par les devs)
+
+* **Exchange** : `EXCHANGE_ID` (par défaut `mexc`) + wrapper CCXT. Prévoir `EXCHANGE_TESTNET` pour basculer en sandbox quand disponible. Pas de hardcode d'`okx`/`mexc` dans le métier.
+* **Modes de fonctionnement** :
+  * `PAPER_TRADING=true|false`
+  * `EXCHANGE_TESTNET=true|false`
+  * `RISK_MAX_TRADE_USD` (20 par défaut) et `RISK_MAX_TRADE_PCT_EQUITY` (0.05 par défaut)
+* **Trends** :
+  * **MVP obligatoire** : Google Trends (`pytrends` avec mots-clés `"socialfi"`, `"crypto airdrop"`, `"memecoin"`), nouveaux listings MEXC, top gainers 24h MEXC.
+  * **Optionnel/V2** : sentiment news avancé, X/Farcaster, autres réseaux.
+* **LLM** : MVP sans function calling. Le LLM reçoit un `SNAPSHOT_JSON` et renvoie uniquement un objet `{ "actions": [...] }` au format ci-dessous.
+* **Format d'actions JSON** (réponse LLM) :
+
+```jsonc
+{
+  "actions": [
+    { "type": "OPEN", "symbol": "XYZ/USDT", "side": "buy", "size_pct_equity": 0.02 },
+    { "type": "CLOSE", "symbol": "OLD/USDT" }
+  ]
+}
+```
+
+  * `OPEN` : `symbol`, `side`, `size_pct_equity` obligatoires.
+  * `CLOSE` : `symbol` obligatoire.
+  * Types acceptés MVP : `OPEN`, `CLOSE` (ajouter `ADJUST` en V2 si besoin).
+* **UI Rich (MVP)** : 3 panneaux minimum – Thoughts (raisonnement LLM), Actions (dernières actions exécutées), Portfolio (balance USDT + positions). Le reste est V2.
+* **SQLite (MVP)** : tables `trades`, `logs`, `config` uniquement. Tables `snapshots`/`metrics` en V2.
+* **Risque** : limites hard (montant max + 5% equity) + filtre liquidité : helper `estimate_pair_liquidity(symbol)` qui refuse les paires < `RISK_MIN_LIQUIDITY_USD` (volume 24h) et plafonne les ordres faibles (ex. `RISK_LOW_LIQUIDITY_CAP_USD`).
 
 ## 3\. Spécifications Détaillées des Modules
 

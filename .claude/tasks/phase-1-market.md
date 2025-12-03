@@ -22,6 +22,8 @@ Pour une stratégie **"1% ROI/jour + Trends SocialFi/Memecoins"** avec un **peti
 
 **Note sécurité** : MEXC est une plateforme de **transit et d'exécution**, pas de stockage long terme. Ne pas y laisser de gros montants dormants.
 
+**Paramétrage MVP** : `EXCHANGE_ID=mexc` obligatoire (pas de hardcode dans le métier), support `EXCHANGE_TESTNET` + `PAPER_TRADING`. Scope MVP = MEXC **spot USDT** uniquement (dérivés en V2).
+
 ## Statut Global
 - [ ] Phase complète
 

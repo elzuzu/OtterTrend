@@ -11,6 +11,8 @@
 - Phase 2 complète (trends tools)
 - Phase 3 partielle (renderer pour affichage)
 
+**Note MVP** : le produit actuel tourne **sans function calling** (LLM renvoie un JSON `actions`). Cette phase est prévue V2 : ne pas impacter le MVP minimal tant que les fondations précédentes ne sont pas finalisées.
+
 ---
 
 ## T4.1 - Définition des Schemas de Tools

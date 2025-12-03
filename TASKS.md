@@ -198,6 +198,20 @@ Phase 0 (Setup)
 | T6.5.2 | docker-compose.yml | MOYENNE | 🔴 |
 | T6.5.3 | Script de démarrage | HAUTE | 🔴 |
 
+
+---
+
+## Rappels MVP (à respecter partout)
+
+* Exchange par défaut : **MEXC spot USDT**, paramétrable via `EXCHANGE_ID` (`mexc` par défaut). Prévoir `EXCHANGE_TESTNET` et `PAPER_TRADING`.
+* LLM MVP **sans function calling** : entrée `SNAPSHOT_JSON`, sortie JSON `{ "actions": [...] }` (types `OPEN`/`CLOSE`, champ `size_pct_equity` requis pour `OPEN`).
+* Trends : Google Trends mots-clés `socialfi`, `crypto airdrop`, `memecoin` + nouveaux listings MEXC + top gainers 24h MEXC. Sentiment social avancé = V2.
+* SQLite : tables `trades`, `logs`, `config` uniquement pour le MVP.
+* UI Rich : 3 panneaux minimum (Thoughts / Actions / Portfolio basique). Tout le reste en V2.
+* Risque :
+  * Limites hard : `RISK_MAX_TRADE_USD` (20 par défaut) et `RISK_MAX_TRADE_PCT_EQUITY` (0.05 par défaut).
+  * Filtre liquidité : helper `estimate_pair_liquidity(symbol)` qui bloque les paires < `RISK_MIN_LIQUIDITY_USD` et plafonne les ordres à `RISK_LOW_LIQUIDITY_CAP_USD` en cas de volume faible.
+
 ---
 
 ## Architecture Cible
