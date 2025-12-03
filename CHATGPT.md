@@ -1596,6 +1596,3 @@ Donne-lui juste ces phrases-clés :
 
 * **Prompt** : clairement informer le LLM qu’il traite avec MEXC, frais bas, petits caps, et qu’il doit exploiter ça avec prudence (fréquence d’ordres élevée mais tailles petites).
 
----
-
-Si tu veux, je peux te rédiger le petit bloc “Mise à jour de la spéc” que tu colles tel quel dans ton document, avec uniquement les points “Switch OKX → MEXC + outils d’early listing”.
