@@ -36,7 +36,7 @@ Pour une stratégie **"1% ROI/jour + Trends SocialFi/Memecoins"** avec un **peti
 
 | Phase | Nom | Description | Priorité | Statut |
 |-------|-----|-------------|----------|--------|
-| 0 | [Setup & Architecture](/.claude/tasks/phase-0-setup.md) | Structure, config, base de données | CRITIQUE | 🔴 |
+| 0 | [Setup & Architecture](/.claude/tasks/phase-0-setup.md) | Structure, config, base de données | CRITIQUE | 🟢 |
 | 1 | [Market & Portfolio](/.claude/tasks/phase-1-market.md) | Interface MEXC/CCXT | CRITIQUE | 🔴 |
 | 2 | [Trends & Social](/.claude/tasks/phase-2-trends.md) | Google Trends, sentiment news | HAUTE | 🔴 |
 | 3 | [UI Rich](/.claude/tasks/phase-3-ui.md) | Interface terminal Rich | MOYENNE | 🔴 |
@@ -73,21 +73,21 @@ Phase 0 (Setup)
 
 | ID | Tâche | Priorité | Statut |
 |----|-------|----------|--------|
-| T0.1.1 | Créer l'arborescence de fichiers | CRITIQUE | 🔴 |
-| T0.1.2 | Créer requirements.txt | CRITIQUE | 🔴 |
-| T0.1.3 | Créer .env.example | HAUTE | 🔴 |
-| T0.1.4 | Créer .gitignore | HAUTE | 🔴 |
-| T0.2.1 | Module de configuration centralisé | HAUTE | 🔴 |
-| T0.2.2 | Point d'entrée main.py | CRITIQUE | 🔴 |
-| T0.3.1 | Implémenter src/bot/memory.py (SQLite) | CRITIQUE | 🔴 |
-| T0.4.1 | Implémenter src/client/groq_adapter.py | CRITIQUE | 🔴 |
-| T0.5.1 | Implémenter src/bot/loop.py (squelette) | CRITIQUE | 🔴 |
-| T0.7.1 | Setup script Mac Mini M4 ARM64 | HAUTE | 🔴 |
-| T0.7.2 | Module détection hardware (src/hardware.py) | HAUTE | 🔴 |
-| T0.7.3 | Requirements Apple Silicon (MLX, Core ML) | HAUTE | 🔴 |
-| T0.7.4 | Interfaces accélérateurs hardware | HAUTE | 🔴 |
-| T0.7.5 | Backend MLX (src/accelerators/mlx_backend.py) | HAUTE | 🔴 |
-| T0.7.6 | Backend Core ML (src/accelerators/coreml_backend.py) | HAUTE | 🔴 |
+| T0.1.1 | Créer l'arborescence de fichiers | CRITIQUE | 🟢 |
+| T0.1.2 | Créer requirements.txt | CRITIQUE | 🟢 |
+| T0.1.3 | Créer .env.example | HAUTE | 🟢 |
+| T0.1.4 | Créer .gitignore | HAUTE | 🟢 |
+| T0.2.1 | Module de configuration centralisé | HAUTE | 🟢 |
+| T0.2.2 | Point d'entrée main.py | CRITIQUE | 🟢 |
+| T0.3.1 | Implémenter src/bot/memory.py (SQLite) | CRITIQUE | 🟢 |
+| T0.4.1 | Implémenter src/client/groq_adapter.py | CRITIQUE | 🟢 |
+| T0.5.1 | Implémenter src/bot/loop.py (squelette) | CRITIQUE | 🟢 |
+| T0.7.1 | Setup script Mac Mini M4 ARM64 | HAUTE | 🟢 |
+| T0.7.2 | Module détection hardware (src/hardware.py) | HAUTE | 🟢 |
+| T0.7.3 | Requirements Apple Silicon (MLX, Core ML) | HAUTE | 🟢 |
+| T0.7.4 | Interfaces accélérateurs hardware | HAUTE | 🟢 |
+| T0.7.5 | Backend MLX (src/accelerators/mlx_backend.py) | HAUTE | 🟢 |
+| T0.7.6 | Backend Core ML (src/accelerators/coreml_backend.py) | HAUTE | 🟢 |
 
 ---
 

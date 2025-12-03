@@ -1,0 +1,11 @@
+asyncio
+python-dotenv
+pydantic
+ccxt
+httpx
+rich
+pytrends
+requests
+SQLAlchemy
+aiosqlite
+openai
