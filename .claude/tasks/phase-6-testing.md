@@ -1073,6 +1073,57 @@ if __name__ == "__main__":
 
 ---
 
+## T6.6 - Tests de résilience « Envoy-like » (réseau CEX)
+
+### T6.6.1 - Chaos tests circuit breaker / retries / hedging
+**Priorité**: HAUTE  \
+**Estimation**: Moyenne
+
+- Simuler erreurs 429/5xx/timeout et latence >800ms pour vérifier :
+  - ouverture/fermeture du circuit breaker par route (état exposé dans les logs/traces),
+  - retries avec backoff+jitter respectant les budgets rate limit,
+  - hedging qui annule la requête lente.
+- Tester la demi-ouverture (1-3 probes) et la propagation d'erreurs typées vers le risk manager.
+
+**Critères de validation**:
+- [ ] Tests unitaires ou d'intégration qui trippent le breaker et valident les transitions.
+- [ ] Logs/traces contiennent les événements breaker/hedging.
+- [ ] Aucun dépassement des quotas configurés.
+
+---
+
+### T6.6.2 - Charge contrôlée & adaptive concurrency
+**Priorité**: HAUTE  \
+**Estimation**: Moyenne
+
+- Test de charge (locust/pytest-asyncio) sur `get_tickers`/`fetch_order_book` pour vérifier :
+  - adaptation automatique de la concurrence en fonction de la latence (pattern Envoy 2025),
+  - load shedding quand la file dépasse le seuil, avec code explicite.
+- Vérifier la priorité (orders > account > market bulk) sous contention.
+
+**Critères de validation**:
+- [ ] Concurrency max diminue quand latence augmente, puis remonte après cooldown.
+- [ ] Shed events comptabilisés et non bloquants pour les ordres.
+- [ ] Mesure p95 latence reste sous le seuil cible.
+
+---
+
+### T6.6.3 - Observabilité OpenTelemetry
+**Priorité**: HAUTE  \
+**Estimation**: Simple
+
+- Tests qui valident l'émission de traces OTLP et de métriques Prometheus :
+  - `cex_http_latency_ms`, `cex_shed_total`, `cex_breaker_open_total`, connexions actives,
+  - corrélation trace_id/span_id dans les logs JSON.
+- Vérifier que l'export peut être activé/désactivé via `config` et que les labels incluent endpoint/symbol.
+
+**Critères de validation**:
+- [ ] Export OTLP activable et observable dans un collecteur local (ou mock OTLP).
+- [ ] Metrics exposées et nommées correctement.
+- [ ] Logs corrélés aux actions LLM.
+
+---
+
 ## Notes de Déploiement
 
 ### Recommandations Production
