@@ -1,12 +1,34 @@
 # OtterTrend - Plan de Développement
 
-> **Objectif**: Bot de trading autonome SocialFi/Crypto 100% fonctionnel
+> **Objectif**: Bot de trading 100% AUTONOME SocialFi/Crypto
 >
 > **Exchange Principal**: MEXC (frais bas, listings rapides)
 >
-> **Technologie LLM**: Groq (Llama 3.3 70B)
+> **Technologie LLM**: Groq (Llama 3.3 70B Versatile)
 >
 > **ROI Cible**: >1% journalier
+>
+> **Architecture**: LLM Orchestrateur + Tools Observer/Réfléchir/Agir
+
+---
+
+## Pourquoi MEXC ?
+
+Pour une stratégie **"1% ROI/jour + Trends SocialFi/Memecoins"** avec un **petit capital**, MEXC est le choix optimal :
+
+| Critère | MEXC 🏆 | OKX | Bybit |
+|---------|---------|-----|-------|
+| **Frais Spot** | **0.00% Maker / 0.01% Taker** | 0.08% / 0.10% | 0.10% / 0.10% |
+| **Vitesse Listing** | **Très rapide (Degen)** | Lente | Moyenne |
+| **Niches SocialFi/Meme** | **Énorme choix** | Faible | Bon |
+| **Liquidité** | Moyenne | Excellent | Excellent |
+
+**Avantages clés pour notre bot :**
+1. **Frais quasi nuls** - Critical pour 10-20 trades/jour. Sur OKX, les 0.1% mangent les profits.
+2. **Listings agressifs** - Tokens SocialFi disponibles des semaines avant OKX/Binance.
+3. **Scalping possible** - Avec 0% fees maker, on peut capturer des mouvements plus petits.
+
+**Note sécurité** : MEXC est une plateforme de **transit et d'exécution**, pas de stockage long terme. Ne pas y laisser de gros montants dormants.
 
 ---
 
@@ -163,9 +185,47 @@ Phase 0 (Setup)
 
 ## Architecture Cible
 
+### Pattern Observer → Réfléchir → Agir (ChatGPT Spec)
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    LLM ORCHESTRATEUR (Groq)                     │
+│                  Llama 3.3 70B Versatile                        │
+│            "Tu es OtterTrend, bot 100% AUTONOME"                │
+└─────────────────┬───────────────────────────────┬───────────────┘
+                  │                               │
+    ┌─────────────▼─────────────┐   ┌────────────▼────────────┐
+    │       OBSERVER            │   │       RÉFLÉCHIR         │
+    │   (Données brutes)        │   │     (mini-ML)           │
+    ├───────────────────────────┤   ├─────────────────────────┤
+    │ • get_market_snapshot     │   │ • ml_detect_regime      │
+    │ • get_orderbook           │   │ • ml_forecast_volatility│
+    │ • get_google_trends       │   │ • ml_score_sentiment    │
+    │ • get_trending_tokens     │   │ • ml_narrative_strength │
+    │ • get_social_mentions     │   │ • ml_estimate_slippage  │
+    │ • get_crypto_news         │   │ • ml_detect_anomalies   │
+    └───────────────────────────┘   └─────────────────────────┘
+                  │                               │
+                  └───────────────┬───────────────┘
+                                  │
+                    ┌─────────────▼─────────────┐
+                    │          AGIR             │
+                    │    (Portfolio & Risk)     │
+                    ├───────────────────────────┤
+                    │ • get_portfolio_state     │
+                    │ • risk_constraints        │
+                    │ • risk_check_order        │
+                    │ • place_order (MEXC)      │
+                    │ • close_position          │
+                    │ • cancel_order            │
+                    └───────────────────────────┘
+```
+
+### Structure de Fichiers
+
 ```
 OtterTrend/
-├── main.py                          # Point d'entrée
+├── main.py                          # Point d'entrée (boucle autonome)
 ├── requirements.txt
 ├── .env.example
 ├── .gitignore
@@ -182,20 +242,32 @@ OtterTrend/
 │   │   └── groq_adapter.py          # Adaptateur LLM Groq
 │   ├── bot/
 │   │   ├── __init__.py
-│   │   ├── brain.py                 # Logique décisionnelle
+│   │   ├── brain.py                 # Policy LLM autonome
 │   │   ├── memory.py                # SQLite persistence
-│   │   └── loop.py                  # Boucle Observe→Think→Act
+│   │   └── loop.py                  # Orchestrateur Observe→Think→Act
 │   ├── tools/
 │   │   ├── __init__.py
-│   │   ├── market.py                # MEXC/CCXT interface
-│   │   ├── trends.py                # Google Trends + news
-│   │   ├── risk.py                  # Risk manager
-│   │   ├── analytics.py             # ML/stats basiques
-│   │   ├── schemas.py               # Tools JSON schemas
+│   │   │
+│   │   ├── # === OBSERVER (données brutes & trends) ===
+│   │   ├── market.py                # get_market_snapshot, get_orderbook (MEXC)
+│   │   ├── trends.py                # get_google_trends, get_trending_tokens
+│   │   ├── social.py                # get_social_mentions, get_social_trending
+│   │   ├── news.py                  # get_crypto_news, get_project_announcements
+│   │   │
+│   │   ├── # === RÉFLÉCHIR (mini-ML spécialisés) ===
+│   │   ├── analytics.py             # ml_detect_regime, ml_forecast_volatility
+│   │   ├── sentiment.py             # ml_score_sentiment, ml_narrative_strength
+│   │   │
+│   │   ├── # === AGIR (portfolio, risk, exécution) ===
+│   │   ├── portfolio.py             # get_portfolio_state, risk_constraints
+│   │   ├── risk.py                  # risk_check_order (garde-fous hard-coded)
+│   │   ├── execution.py             # place_order, close_position (MEXC)
+│   │   │
+│   │   ├── schemas.py               # Tools JSON schemas pour Groq
 │   │   └── router.py                # Tool execution router
 │   └── ui/
 │       ├── __init__.py
-│       └── renderer.py              # Rich CLI
+│       └── renderer.py              # Rich CLI (style gemini-cli)
 ├── tests/
 │   ├── __init__.py
 │   ├── test_config.py
@@ -204,7 +276,7 @@ OtterTrend/
 │   ├── test_market.py
 │   └── test_integration.py
 ├── scripts/
-│   └── start.py                     # Script de démarrage
+│   └── start.py                     # Script de démarrage avec checks
 ├── bot_data.db                      # SQLite (runtime)
 └── .claude/
     └── tasks/
@@ -268,12 +340,30 @@ OtterTrend/
 
 ## Instructions pour l'Agent de Coding
 
+### Règles Générales
 1. **Ordre d'exécution**: Suivre les phases dans l'ordre (0→1→2→3→4→5→6)
 2. **Une tâche à la fois**: Compléter chaque tâche avant de passer à la suivante
 3. **Marquer le statut**: Mettre à jour ce fichier quand une tâche est complétée
 4. **Tests**: Écrire des tests pour chaque module
 5. **Commits**: Commiter après chaque tâche complétée
 6. **Sécurité**: Ne jamais contourner les limites de risque
+
+### Bot 100% AUTONOME
+Le bot doit être **100% autonome** - il DÉCIDE et AGIT lui-même :
+- Pas de "je recommande" ou "je suggère"
+- Le LLM appelle `place_order()` directement quand il veut trader
+- La couche risk ajuste ou rejette si nécessaire
+- Explication du raisonnement AVANT chaque action
+
+### Spécificités MEXC
+- Frais: 0% maker / 0.01% taker - optimiser pour ordres limite
+- API plus stricte sur rate limits - ajouter délais entre appels
+- Pas de passphrase (contrairement à OKX) - juste API key + secret
+- Surveiller les nouveaux listings - c'est la spécialité de MEXC
+
+### System Prompt du LLM
+Le bot doit recevoir ce type d'instruction :
+> "Tu trades sur MEXC. Profite des frais extrêmement bas (0% maker) pour capturer des mouvements de prix plus petits (scalping) si la tendance est incertaine. Surveille les nouveaux listings récents car c'est la spécialité de cet exchange."
 
 ---
 

@@ -1,6 +1,26 @@
 # Phase 1 - Market & Portfolio (MEXC via CCXT)
 
-> **Objectif**: Implémenter l'interface avec l'exchange MEXC pour récupérer les données marché, gérer le portefeuille et exécuter des ordres.
+> **Objectif**: Implémenter les outils OBSERVER et AGIR pour l'interface avec l'exchange MEXC - données marché, portefeuille et exécution d'ordres.
+>
+> **Référence**: Conversation ChatGPT - Architecture LLM orchestrateur + mini-ML + outils
+
+## Pourquoi MEXC ?
+
+Pour une stratégie **"1% ROI/jour + Trends SocialFi/Memecoins"** avec un **petit capital**, MEXC est le choix optimal :
+
+| Critère | MEXC 🏆 | OKX | Bybit |
+|---------|---------|-----|-------|
+| **Frais Spot** | **0.00% Maker / 0.01% Taker** | 0.08% / 0.10% | 0.10% / 0.10% |
+| **Vitesse Listing** | **Très rapide (Degen)** | Lente | Moyenne |
+| **Niches SocialFi/Meme** | **Énorme choix** | Faible | Bon |
+| **Liquidité** | Moyenne | Excellent | Excellent |
+
+**Avantages clés pour notre bot :**
+1. **Frais quasi nuls** - Critical pour 10-20 trades/jour. Sur OKX, les 0.1% mangent les profits.
+2. **Listings agressifs** - Tokens SocialFi disponibles des semaines avant OKX/Binance.
+3. **Scalping possible** - Avec 0% fees maker, on peut capturer des mouvements plus petits.
+
+**Note sécurité** : MEXC est une plateforme de **transit et d'exécution**, pas de stockage long terme. Ne pas y laisser de gros montants dormants.
 
 ## Statut Global
 - [ ] Phase complète
@@ -10,13 +30,13 @@
 
 ---
 
-## T1.1 - Interface Exchange Générique
+## T1.1 - Interface Exchange MEXC (OBSERVER)
 
-### T1.1.1 - Créer le wrapper CCXT multi-exchange
+### T1.1.1 - Créer le wrapper CCXT pour MEXC
 **Priorité**: CRITIQUE
 **Estimation**: Moyenne
 
-Créer `src/tools/market.py` avec support pour MEXC (principal), Bybit et OKX (backup).
+Créer `src/tools/market.py` avec support MEXC comme exchange principal.
 
 **Architecture** :
 ```python
@@ -25,32 +45,32 @@ import ccxt.async_support as ccxt
 from src.config import get_config
 
 class ExchangeClient:
-    """Interface unifiée pour les exchanges via CCXT"""
+    """
+    Interface unifiée pour MEXC via CCXT.
+    Outil OBSERVER - données marché brutes.
+
+    MEXC: Frais 0% maker / 0.01% taker - idéal pour high-frequency.
+    """
 
     def __init__(self) -> None:
         self._exchange: Optional[ccxt.Exchange] = None
         self._config = get_config()
 
     def _create_exchange(self) -> ccxt.Exchange:
-        """Factory pour créer l'instance exchange selon config"""
-        exchange_id = self._config.exchange_id
+        """Factory pour créer l'instance MEXC"""
         params = {
-            "apiKey": self._config.exchange_api_key,
-            "secret": self._config.exchange_api_secret,
+            "apiKey": self._config.mexc_api_key,
+            "secret": self._config.mexc_api_secret,
             "enableRateLimit": True,
-            "options": {"defaultType": "spot"},
+            "options": {
+                "defaultType": "spot",
+                "recvWindow": 60000,  # MEXC spécifique
+            },
         }
 
-        # Spécificités par exchange
-        if exchange_id == "mexc":
-            params["options"]["recvWindow"] = 60000
-        elif exchange_id == "okx":
-            params["password"] = os.getenv("EXCHANGE_PASSWORD", "")
+        exchange = ccxt.mexc(params)
 
-        cls = getattr(ccxt, exchange_id)
-        exchange = cls(params)
-
-        if self._config.exchange_testnet:
+        if self._config.mexc_testnet:
             exchange.set_sandbox_mode(True)
 
         return exchange
@@ -68,19 +88,115 @@ class ExchangeClient:
 ```
 
 **Critères de validation**:
-- [ ] Support MEXC, Bybit, OKX via variable d'env
-- [ ] Mode sandbox/testnet configurable
-- [ ] Rate limiting activé par défaut
+- [ ] Support MEXC avec recvWindow
+- [ ] Mode sandbox configurable
+- [ ] Rate limiting activé (MEXC stricte sur les requêtes)
 - [ ] Connexion lazy (créée au premier appel)
 - [ ] Méthode close() pour cleanup
 
 ---
 
-### T1.1.2 - Implémenter les méthodes de lecture marché
+### T1.1.2 - Implémenter get_market_snapshot (OBSERVER Tool)
 **Priorité**: CRITIQUE
 **Estimation**: Moyenne
 
-Ajouter les méthodes suivantes à `ExchangeClient` :
+Outil principal pour le LLM - snapshot complet du marché:
+
+```python
+async def get_market_snapshot(
+    self,
+    symbols: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """
+    OBSERVER TOOL: get_market_snapshot
+    Snapshot complet pour le LLM autonome.
+
+    Retourne:
+    - timestamp: ISO format
+    - tickers: prix, volume, change 24h
+    - portfolio: état du portefeuille
+    - new_listings: tokens récemment listés (spécialité MEXC)
+    """
+    if symbols is None:
+        # Tokens SocialFi par défaut (ChatGPT spec)
+        symbols = [
+            "BTC/USDT", "ETH/USDT", "SOL/USDT",
+            "CYBER/USDT", "ID/USDT", "DEGEN/USDT",  # SocialFi
+        ]
+
+    tickers = await self.get_tickers(symbols)
+    portfolio = await self.get_portfolio_state()
+
+    return {
+        "timestamp": datetime.utcnow().isoformat(),
+        "exchange": "mexc",
+        "mode": "paper" if self._config.paper_trading else "live",
+        "fees_info": "0% maker / 0.01% taker - profite pour scalper",
+        "tickers": tickers,
+        "portfolio": portfolio,
+    }
+```
+
+**Critères de validation**:
+- [ ] Snapshot structuré et complet
+- [ ] Timestamp UTC
+- [ ] Inclut tokens SocialFi par défaut
+- [ ] Performance acceptable (< 5s)
+
+---
+
+### T1.1.3 - Implémenter get_orderbook (OBSERVER Tool)
+**Priorité**: HAUTE
+**Estimation**: Simple
+
+```python
+async def get_orderbook(
+    self,
+    symbol: str,
+    depth: int = 20,
+) -> Dict[str, Any]:
+    """
+    OBSERVER TOOL: get_orderbook
+    Carnet d'ordres pour analyse de liquidité.
+
+    Note: Sur MEXC, vérifier la liquidité car certaines paires
+    sont moins profondes que sur OKX/Binance.
+    """
+    ob = await self.exchange.fetch_order_book(symbol, depth)
+
+    # Calcul du spread
+    best_bid = float(ob["bids"][0][0]) if ob["bids"] else 0
+    best_ask = float(ob["asks"][0][0]) if ob["asks"] else 0
+    mid_price = (best_bid + best_ask) / 2 if (best_bid and best_ask) else 0
+    spread_pct = ((best_ask - best_bid) / mid_price * 100) if mid_price else 0
+
+    return {
+        "symbol": symbol,
+        "timestamp": ob.get("timestamp"),
+        "bids": ob["bids"][:depth],
+        "asks": ob["asks"][:depth],
+        "best_bid": best_bid,
+        "best_ask": best_ask,
+        "mid_price": mid_price,
+        "spread_pct": round(spread_pct, 4),
+        # Warning si faible liquidité
+        "low_liquidity_warning": spread_pct > 1.0,
+    }
+```
+
+**Critères de validation**:
+- [ ] Profondeur configurable
+- [ ] Calcul du spread automatique
+- [ ] Warning si liquidité faible
+- [ ] Données normalisées
+
+---
+
+### T1.1.4 - Implémenter méthodes de lecture marché
+**Priorité**: CRITIQUE
+**Estimation**: Moyenne
+
+Ajouter les méthodes helper à `ExchangeClient` :
 
 ```python
 async def get_market_price(self, symbol: str) -> float:
@@ -116,16 +232,6 @@ async def get_tickers(self, symbols: List[str]) -> Dict[str, Dict]:
         }
     return result
 
-async def get_orderbook(self, symbol: str, limit: int = 20) -> Dict[str, Any]:
-    """Récupère le carnet d'ordres"""
-    ob = await self.exchange.fetch_order_book(symbol, limit)
-    return {
-        "symbol": symbol,
-        "bids": ob["bids"][:limit],  # [[price, amount], ...]
-        "asks": ob["asks"][:limit],
-        "timestamp": ob.get("timestamp"),
-    }
-
 async def get_ohlcv(
     self, symbol: str, timeframe: str = "1h", limit: int = 100
 ) -> List[Dict]:
@@ -152,35 +258,23 @@ async def get_ohlcv(
 
 ---
 
-## T1.2 - Gestion du Portefeuille
+## T1.2 - Gestion du Portefeuille (AGIR - Lecture)
 
-### T1.2.1 - Implémenter les méthodes de lecture portefeuille
+### T1.2.1 - Implémenter get_portfolio_state (AGIR Tool)
 **Priorité**: CRITIQUE
 **Estimation**: Moyenne
 
 ```python
-async def get_balance(self) -> Dict[str, Any]:
-    """Récupère la balance complète du compte"""
-    balance = await self.exchange.fetch_balance()
-    return {
-        "total": {k: float(v) for k, v in balance.get("total", {}).items() if v > 0},
-        "free": {k: float(v) for k, v in balance.get("free", {}).items() if v > 0},
-        "used": {k: float(v) for k, v in balance.get("used", {}).items() if v > 0},
-    }
-
-async def get_base_balance(self) -> float:
-    """Récupère la balance en devise de base (USDT)"""
-    cfg = get_config()
-    balance = await self.get_balance()
-    return balance["free"].get(cfg.base_currency, 0.0)
-
 async def get_portfolio_state(self) -> Dict[str, Any]:
     """
-    État complet du portefeuille avec valorisation
+    AGIR TOOL: get_portfolio_state
+    État complet du portefeuille avec valorisation.
+
     Retourne:
     - balance_usdt: solde libre en USDT
     - total_equity_usdt: valeur totale du portefeuille
     - positions: liste des positions avec valorisation
+    - positions_count: nombre de positions ouvertes
     """
     cfg = get_config()
     balance = await self.get_balance()
@@ -213,11 +307,20 @@ async def get_portfolio_state(self) -> Dict[str, Any]:
 
     return {
         "mode": "paper" if cfg.paper_trading else "live",
-        "exchange": cfg.exchange_id,
+        "exchange": "mexc",
         "balance_usdt": base_bal,
         "total_equity_usdt": total_equity,
         "positions": positions,
         "positions_count": len(positions),
+    }
+
+async def get_balance(self) -> Dict[str, Any]:
+    """Récupère la balance complète du compte"""
+    balance = await self.exchange.fetch_balance()
+    return {
+        "total": {k: float(v) for k, v in balance.get("total", {}).items() if v > 0},
+        "free": {k: float(v) for k, v in balance.get("free", {}).items() if v > 0},
+        "used": {k: float(v) for k, v in balance.get("used", {}).items() if v > 0},
     }
 ```
 
@@ -229,61 +332,37 @@ async def get_portfolio_state(self) -> Dict[str, Any]:
 
 ---
 
-### T1.2.2 - Implémenter le snapshot marché complet
-**Priorité**: HAUTE
-**Estimation**: Moyenne
+### T1.2.2 - Implémenter risk_constraints (AGIR Tool)
+**Priorité**: CRITIQUE
+**Estimation**: Simple
 
 ```python
-async def get_market_snapshot(
-    self,
-    symbols: Optional[List[str]] = None,
-    include_analytics: bool = True,
-) -> Dict[str, Any]:
+def risk_constraints() -> Dict[str, Any]:
     """
-    Snapshot complet pour le LLM:
-    - Tickers des symboles suivis
-    - Portfolio state
-    - Optionnel: analytics (regime, volatilité)
+    AGIR TOOL: risk_constraints
+    Retourne les limites de risque hard-coded (ChatGPT spec).
+    Le LLM doit respecter ces contraintes.
     """
-    if symbols is None:
-        symbols = ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
-
-    tickers = await self.get_tickers(symbols)
-    portfolio = await self.get_portfolio_state()
-
-    snapshot = {
-        "timestamp": datetime.utcnow().isoformat(),
-        "exchange": self._config.exchange_id,
-        "tickers": tickers,
-        "portfolio": portfolio,
+    cfg = get_config()
+    return {
+        "max_order_usd": cfg.max_order_usd,          # $20 max par ordre
+        "max_equity_pct": cfg.max_equity_pct,        # 5% max du portefeuille
+        "max_daily_loss_usd": cfg.max_daily_loss_usd,  # $50 halt
+        "max_positions": cfg.max_positions,          # 5 positions max
+        "paper_mode": cfg.paper_trading,
+        "exchange_fees": "0% maker / 0.01% taker",   # MEXC advantage
     }
-
-    if include_analytics:
-        from src.tools.analytics import compute_market_analytics
-        # Récupérer OHLCV pour analytics
-        for sym in symbols[:3]:  # Limiter pour perf
-            try:
-                ohlcv = await self.get_ohlcv(sym, "1h", 48)
-                prices = [c["close"] for c in ohlcv]
-                analytics = compute_market_analytics(prices)
-                snapshot.setdefault("analytics", {})[sym] = analytics
-            except Exception:
-                continue
-
-    return snapshot
 ```
 
 **Critères de validation**:
-- [ ] Snapshot structuré et complet
-- [ ] Timestamp UTC
-- [ ] Analytics optionnels
-- [ ] Performance acceptable (< 5s)
+- [ ] Limites provenant de la config
+- [ ] Format clair pour le LLM
 
 ---
 
-## T1.3 - Exécution d'Ordres
+## T1.3 - Exécution d'Ordres (AGIR)
 
-### T1.3.1 - Implémenter la passation d'ordres
+### T1.3.1 - Implémenter place_order (AGIR Tool)
 **Priorité**: CRITIQUE
 **Estimation**: Haute
 
@@ -297,8 +376,14 @@ async def place_order(
     price: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
-    Place un ordre sur l'exchange.
-    IMPORTANT: Le risk check doit être fait AVANT d'appeler cette méthode!
+    AGIR TOOL: place_order
+    Place un ordre sur MEXC.
+
+    Note MEXC: Préférer les ordres LIMIT (0% fees) aux MARKET (0.01% fees)
+    quand possible pour maximiser les profits.
+
+    IMPORTANT: La couche risk doit valider AVANT d'appeler cette méthode!
+    Le bot autonome appelle directement quand il veut trader.
     """
     side = side.lower()
     if side not in ("buy", "sell"):
@@ -324,10 +409,28 @@ async def place_order(
         "status": order["status"],
         "timestamp": order.get("timestamp"),
         "fee": order.get("fee"),
+        "fee_info": "0% if limit, 0.01% if market",
     }
+```
 
+**Critères de validation**:
+- [ ] Support ordres market et limit
+- [ ] Retour normalisé avec toutes les infos
+- [ ] Gestion des erreurs MEXC
+- [ ] Logs de l'exécution
+
+---
+
+### T1.3.2 - Implémenter close_position et cancel_order (AGIR Tools)
+**Priorité**: HAUTE
+**Estimation**: Moyenne
+
+```python
 async def close_position(self, symbol: str) -> Optional[Dict[str, Any]]:
-    """Ferme toute la position sur un symbole (vend tout)"""
+    """
+    AGIR TOOL: close_position
+    Ferme toute la position sur un symbole (vend tout).
+    """
     base_asset = symbol.split("/")[0]
     balance = await self.get_balance()
     qty = balance["free"].get(base_asset, 0.0)
@@ -335,18 +438,29 @@ async def close_position(self, symbol: str) -> Optional[Dict[str, Any]]:
     if qty <= 0:
         return None
 
-    # Vérifier la taille minimum d'ordre
+    # Vérifier la taille minimum d'ordre MEXC
     try:
         markets = await self.exchange.load_markets()
         market = markets.get(symbol)
         if market:
             min_amount = market.get("limits", {}).get("amount", {}).get("min", 0)
             if qty < min_amount:
-                return None
+                return {"error": f"Quantity {qty} below minimum {min_amount}"}
     except Exception:
         pass
 
     return await self.place_order(symbol, "sell", qty, "market")
+
+async def cancel_order(self, order_id: str, symbol: str) -> Dict[str, Any]:
+    """
+    AGIR TOOL: cancel_order
+    Annule un ordre ouvert.
+    """
+    try:
+        result = await self.exchange.cancel_order(order_id, symbol)
+        return {"success": True, "order_id": order_id}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 async def get_order(self, order_id: str, symbol: str) -> Dict[str, Any]:
     """Récupère le statut d'un ordre"""
@@ -359,65 +473,108 @@ async def get_order(self, order_id: str, symbol: str) -> Dict[str, Any]:
         "remaining": float(order.get("remaining", 0)),
         "average_price": float(order.get("average") or 0),
     }
-
-async def cancel_order(self, order_id: str, symbol: str) -> bool:
-    """Annule un ordre ouvert"""
-    try:
-        await self.exchange.cancel_order(order_id, symbol)
-        return True
-    except Exception:
-        return False
 ```
 
 **Critères de validation**:
-- [ ] Support ordres market et limit
-- [ ] Retour normalisé avec toutes les infos
-- [ ] Gestion des minimums d'ordre
 - [ ] close_position vend la totalité
-- [ ] Gestion des erreurs (balance insuffisante, etc.)
+- [ ] cancel_order avec gestion d'erreurs
+- [ ] Retours normalisés
 
 ---
 
-## T1.4 - Intelligence Exchange (MEXC Spécifique)
+## T1.4 - Intelligence Market (OBSERVER Avancé)
 
-### T1.4.1 - Implémenter la détection de nouveaux listings
+### T1.4.1 - Implémenter get_trending_tokens (OBSERVER Tool)
 **Priorité**: HAUTE
 **Estimation**: Moyenne
 
 ```python
-async def get_all_markets(self) -> List[Dict[str, Any]]:
-    """Récupère tous les marchés disponibles"""
-    markets = await self.exchange.load_markets(reload=True)
-    result = []
-    for symbol, market in markets.items():
-        if market.get("spot") and market.get("active"):
-            result.append({
-                "symbol": symbol,
-                "base": market["base"],
-                "quote": market["quote"],
-                "active": market["active"],
-            })
-    return result
+async def get_trending_tokens(
+    self,
+    quote_filter: str = "USDT",
+    min_volume_usdt: float = 50000,
+    limit: int = 20,
+) -> Dict[str, Any]:
+    """
+    OBSERVER TOOL: get_trending_tokens
+    Top gainers et losers pour détecter les mouvements.
 
+    MEXC: Exchange spécialisé dans les listings rapides.
+    Les nouveaux tokens apparaissent ici avant OKX/Binance.
+    """
+    try:
+        tickers = await self.exchange.fetch_tickers()
+    except Exception as e:
+        return {"error": str(e), "gainers": [], "losers": []}
+
+    filtered = []
+
+    for symbol, data in tickers.items():
+        if not symbol.endswith(f"/{quote_filter}"):
+            continue
+
+        change_pct = float(data.get("percentage", 0) or 0)
+        quote_volume = float(data.get("quoteVolume", 0) or 0)
+
+        if quote_volume < min_volume_usdt:
+            continue
+
+        # Filtrer les anomalies
+        if change_pct > 500 or change_pct < -95:
+            continue
+
+        filtered.append({
+            "symbol": symbol,
+            "change_24h_pct": round(change_pct, 2),
+            "last_price": float(data.get("last", 0)),
+            "volume_usdt": round(quote_volume, 0),
+        })
+
+    # Trier pour gainers et losers
+    sorted_list = sorted(filtered, key=lambda x: x["change_24h_pct"], reverse=True)
+
+    return {
+        "gainers": sorted_list[:limit],
+        "losers": sorted_list[-limit:][::-1],
+        "total_symbols": len(filtered),
+        "exchange_note": "MEXC liste agressivement les nouveaux tokens - surveiller les récents listings",
+    }
+```
+
+**Critères de validation**:
+- [ ] Filtrage par volume pour qualité
+- [ ] Tri correct des résultats
+- [ ] Filtrage des anomalies
+
+---
+
+### T1.4.2 - Implémenter detect_new_listings (OBSERVER Tool - MEXC Spécialité)
+**Priorité**: HAUTE
+**Estimation**: Moyenne
+
+```python
 async def detect_new_listings(
     self,
     known_symbols: Optional[set] = None,
     quote_filter: str = "USDT",
 ) -> List[Dict[str, Any]]:
     """
-    Détecte les nouveaux listings depuis la dernière vérification.
-    Compare avec les symboles connus en mémoire/DB.
+    OBSERVER TOOL: detect_new_listings
+    Détecte les nouveaux listings - LA spécialité de MEXC!
+
+    MEXC liste souvent des tokens des semaines avant OKX/Binance.
+    C'est un avantage stratégique majeur pour notre bot.
     """
-    markets = await self.get_all_markets()
+    markets = await self.exchange.load_markets(reload=True)
 
     current_symbols = {
-        m["symbol"] for m in markets
-        if m["quote"] == quote_filter
+        symbol for symbol, market in markets.items()
+        if market.get("quote") == quote_filter and market.get("active")
     }
 
     if known_symbols is None:
-        # Premier appel - tout est "nouveau"
-        return []
+        # Premier appel - retourner les symboles actuels
+        return {"symbols": list(current_symbols), "new_count": 0}
 
     new_symbols = current_symbols - known_symbols
     new_listings = []
@@ -431,177 +588,103 @@ async def detect_new_listings(
                 "price": ticker["last"],
                 "volume_24h": ticker["volume_24h"],
                 "discovered_at": datetime.utcnow().isoformat(),
+                "tip": "Nouveau listing MEXC - potentiel early entry",
             })
         except Exception:
             continue
 
-    return new_listings
-```
-
-**Critères de validation**:
-- [ ] Détection efficace des nouveaux tokens
-- [ ] Filtrage par quote currency
-- [ ] Enrichissement avec ticker data
-
----
-
-### T1.4.2 - Implémenter le scan des top gainers
-**Priorité**: HAUTE
-**Estimation**: Moyenne
-
-```python
-async def get_top_gainers(
-    self,
-    quote_filter: str = "USDT",
-    min_volume_usdt: float = 10000,
-    limit: int = 20,
-) -> List[Dict[str, Any]]:
-    """
-    Récupère les top gainers 24h.
-    Filtré par volume minimum pour éviter les illiquides.
-    """
-    try:
-        tickers = await self.exchange.fetch_tickers()
-    except Exception:
-        return []
-
-    gainers = []
-
-    for symbol, data in tickers.items():
-        # Filtrer par quote
-        if not symbol.endswith(f"/{quote_filter}"):
-            continue
-
-        change_pct = float(data.get("percentage", 0) or 0)
-        quote_volume = float(data.get("quoteVolume", 0) or 0)
-
-        # Filtrer par volume
-        if quote_volume < min_volume_usdt:
-            continue
-
-        # Filtrer les variations extrêmes (probables erreurs)
-        if change_pct > 1000 or change_pct < -99:
-            continue
-
-        gainers.append({
-            "symbol": symbol,
-            "change_24h_pct": change_pct,
-            "last_price": float(data.get("last", 0)),
-            "volume_usdt": quote_volume,
-            "high_24h": float(data.get("high", 0)),
-            "low_24h": float(data.get("low", 0)),
-        })
-
-    # Trier par performance descendante
-    gainers.sort(key=lambda x: x["change_24h_pct"], reverse=True)
-
-    return gainers[:limit]
-
-async def get_top_losers(
-    self,
-    quote_filter: str = "USDT",
-    min_volume_usdt: float = 10000,
-    limit: int = 20,
-) -> List[Dict[str, Any]]:
-    """Top losers (pour détecter les dips potentiels)"""
-    try:
-        tickers = await self.exchange.fetch_tickers()
-    except Exception:
-        return []
-
-    losers = []
-
-    for symbol, data in tickers.items():
-        if not symbol.endswith(f"/{quote_filter}"):
-            continue
-
-        change_pct = float(data.get("percentage", 0) or 0)
-        quote_volume = float(data.get("quoteVolume", 0) or 0)
-
-        if quote_volume < min_volume_usdt:
-            continue
-
-        if change_pct >= 0 or change_pct < -99:
-            continue
-
-        losers.append({
-            "symbol": symbol,
-            "change_24h_pct": change_pct,
-            "last_price": float(data.get("last", 0)),
-            "volume_usdt": quote_volume,
-        })
-
-    losers.sort(key=lambda x: x["change_24h_pct"])  # Ascending (most negative first)
-
-    return losers[:limit]
-```
-
-**Critères de validation**:
-- [ ] Filtrage par volume pour qualité
-- [ ] Tri correct des résultats
-- [ ] Filtrage des anomalies de données
-- [ ] Performance acceptable sur gros exchanges
-
----
-
-### T1.4.3 - Implémenter l'estimation de liquidité
-**Priorité**: MOYENNE
-**Estimation**: Moyenne
-
-```python
-async def estimate_liquidity(
-    self,
-    symbol: str,
-    depth_pct: float = 1.0,  # ±1% du prix
-) -> Dict[str, Any]:
-    """
-    Estime la liquidité disponible autour du prix actuel.
-    Utile pour le risk manager avant d'exécuter un gros ordre.
-    """
-    try:
-        ticker = await self.get_ticker(symbol)
-        orderbook = await self.get_orderbook(symbol, limit=50)
-    except Exception as e:
-        return {
-            "symbol": symbol,
-            "error": str(e),
-            "tradeable": False,
-        }
-
-    mid_price = ticker["last"]
-    upper_bound = mid_price * (1 + depth_pct / 100)
-    lower_bound = mid_price * (1 - depth_pct / 100)
-
-    # Liquidité côté bid (ce qu'on peut vendre)
-    bid_liquidity = 0.0
-    for price, qty in orderbook["bids"]:
-        if price >= lower_bound:
-            bid_liquidity += price * qty
-
-    # Liquidité côté ask (ce qu'on peut acheter)
-    ask_liquidity = 0.0
-    for price, qty in orderbook["asks"]:
-        if price <= upper_bound:
-            ask_liquidity += price * qty
-
     return {
-        "symbol": symbol,
-        "mid_price": mid_price,
-        "depth_pct": depth_pct,
-        "bid_liquidity_usdt": bid_liquidity,
-        "ask_liquidity_usdt": ask_liquidity,
-        "total_liquidity_usdt": bid_liquidity + ask_liquidity,
-        "spread_pct": ((ticker["ask"] - ticker["bid"]) / mid_price) * 100 if mid_price > 0 else 0,
-        "volume_24h_usdt": ticker["quote_volume_24h"],
-        "tradeable": bid_liquidity > 100 and ask_liquidity > 100,
+        "new_listings": new_listings,
+        "new_count": len(new_listings),
+        "strategy_note": "Les nouveaux listings MEXC précèdent souvent OKX/Binance de plusieurs semaines",
     }
 ```
 
 **Critères de validation**:
-- [ ] Calcul précis de la liquidité à ±X%
-- [ ] Calcul du spread
-- [ ] Flag tradeable pour filtrage rapide
-- [ ] Gestion des erreurs pour pairs inexistantes
+- [ ] Détection efficace des nouveaux tokens
+- [ ] Enrichissement avec ticker data
+- [ ] Note stratégique pour le LLM
+
+---
+
+### T1.4.3 - Implémenter ml_estimate_slippage (RÉFLÉCHIR Tool)
+**Priorité**: MOYENNE
+**Estimation**: Moyenne
+
+```python
+async def ml_estimate_slippage(
+    self,
+    symbol: str,
+    side: str,  # 'buy' | 'sell'
+    amount_usdt: float,
+) -> Dict[str, Any]:
+    """
+    RÉFLÉCHIR TOOL: ml_estimate_slippage
+    Estime le slippage pour un ordre donné basé sur l'orderbook.
+
+    Important sur MEXC: Liquidité parfois faible sur les microcaps.
+    Vérifier avant d'exécuter des ordres significatifs.
+    """
+    try:
+        ob = await self.get_orderbook(symbol, depth=50)
+        ticker = await self.get_ticker(symbol)
+    except Exception as e:
+        return {"symbol": symbol, "error": str(e), "tradeable": False}
+
+    mid_price = ob["mid_price"]
+
+    # Calculer le slippage estimé
+    if side.lower() == "buy":
+        book = ob["asks"]
+    else:
+        book = ob["bids"]
+
+    remaining_usdt = amount_usdt
+    weighted_price = 0.0
+    total_filled = 0.0
+
+    for price, qty in book:
+        level_value = price * qty
+        if level_value >= remaining_usdt:
+            fill_qty = remaining_usdt / price
+            weighted_price += price * fill_qty
+            total_filled += fill_qty
+            remaining_usdt = 0
+            break
+        else:
+            weighted_price += price * qty
+            total_filled += qty
+            remaining_usdt -= level_value
+
+    if total_filled > 0:
+        avg_fill_price = weighted_price / total_filled
+        slippage_pct = ((avg_fill_price - mid_price) / mid_price) * 100
+        if side.lower() == "sell":
+            slippage_pct = -slippage_pct
+    else:
+        avg_fill_price = mid_price
+        slippage_pct = 0
+
+    # MEXC: plus strict sur la liquidité acceptable
+    tradeable = ob["spread_pct"] < 1.5 and abs(slippage_pct) < 0.5
+
+    return {
+        "symbol": symbol,
+        "side": side,
+        "amount_usdt": amount_usdt,
+        "mid_price": mid_price,
+        "estimated_fill_price": round(avg_fill_price, 8),
+        "slippage_pct": round(abs(slippage_pct), 4),
+        "spread_pct": ob["spread_pct"],
+        "tradeable": tradeable,
+        "mexc_note": "Attention aux microcaps avec faible liquidité" if not tradeable else "Liquidité OK",
+    }
+```
+
+**Critères de validation**:
+- [ ] Calcul précis du slippage
+- [ ] Flag tradeable adapté à MEXC
+- [ ] Gestion des erreurs
 
 ---
 
@@ -617,8 +700,9 @@ Créer une classe `PaperExchangeClient` qui hérite de `ExchangeClient` et simul
 class PaperExchangeClient(ExchangeClient):
     """
     Version paper trading de l'exchange client.
-    - Les prix sont réels (fetch depuis l'exchange)
+    - Les prix sont réels (fetch depuis MEXC)
     - Les ordres sont simulés en mémoire
+    - Frais simulés: 0% maker / 0.01% taker (avantage MEXC!)
     """
 
     def __init__(self, initial_balance_usdt: float = 1000.0) -> None:
@@ -646,62 +730,44 @@ class PaperExchangeClient(ExchangeClient):
         order_type: str = "market",
         price: Optional[float] = None,
     ) -> Dict[str, Any]:
-        """Simule l'exécution d'un ordre"""
+        """Simule l'exécution d'un ordre avec prix réels MEXC"""
         cfg = get_config()
         base, quote = symbol.split("/")
 
-        # Récupérer le prix réel
+        # Récupérer le prix réel depuis MEXC
         real_price = price if price else await self.get_market_price(symbol)
         cost = amount * real_price
+
+        # MEXC fees: 0% maker, 0.01% taker
+        fee_rate = 0.0001 if order_type == "market" else 0.0  # 0.01% ou 0%
 
         side = side.lower()
 
         if side == "buy":
-            # Vérifier la balance quote
+            fee = cost * fee_rate
+            total_cost = cost + fee
             quote_balance = self._paper_balance.get(quote, 0.0)
-            if cost > quote_balance:
-                raise ValueError(f"Insufficient {quote} balance: {quote_balance} < {cost}")
 
-            # Exécuter
-            self._paper_balance[quote] = quote_balance - cost
+            if total_cost > quote_balance:
+                raise ValueError(f"Insufficient {quote} balance: {quote_balance:.2f} < {total_cost:.2f}")
+
+            self._paper_balance[quote] = quote_balance - total_cost
             self._paper_balance[base] = self._paper_balance.get(base, 0.0) + amount
-
-            # Tracker position
-            if symbol not in self._paper_positions:
-                self._paper_positions[symbol] = {
-                    "amount": 0.0,
-                    "avg_price": 0.0,
-                    "cost_basis": 0.0,
-                }
-            pos = self._paper_positions[symbol]
-            old_cost = pos["amount"] * pos["avg_price"]
-            new_cost = amount * real_price
-            total_amount = pos["amount"] + amount
-            if total_amount > 0:
-                pos["avg_price"] = (old_cost + new_cost) / total_amount
-            pos["amount"] = total_amount
-            pos["cost_basis"] = pos["amount"] * pos["avg_price"]
 
         else:  # sell
             base_balance = self._paper_balance.get(base, 0.0)
             if amount > base_balance:
-                amount = base_balance  # Vendre ce qu'on a
+                amount = base_balance
 
             if amount <= 0:
                 raise ValueError(f"No {base} to sell")
 
             revenue = amount * real_price
-            self._paper_balance[base] = base_balance - amount
-            self._paper_balance[quote] = self._paper_balance.get(quote, 0.0) + revenue
+            fee = revenue * fee_rate
+            net_revenue = revenue - fee
 
-            # Mettre à jour position
-            if symbol in self._paper_positions:
-                pos = self._paper_positions[symbol]
-                pos["amount"] -= amount
-                if pos["amount"] <= 0:
-                    del self._paper_positions[symbol]
-                else:
-                    pos["cost_basis"] = pos["amount"] * pos["avg_price"]
+            self._paper_balance[base] = base_balance - amount
+            self._paper_balance[quote] = self._paper_balance.get(quote, 0.0) + net_revenue
 
         self._order_counter += 1
         order = {
@@ -711,10 +777,10 @@ class PaperExchangeClient(ExchangeClient):
             "type": order_type,
             "amount": amount,
             "price": real_price,
-            "cost": cost if side == "buy" else amount * real_price,
+            "cost": cost,
             "status": "filled",
             "timestamp": int(datetime.utcnow().timestamp() * 1000),
-            "fee": {"cost": cost * 0.001, "currency": quote},  # 0.1% simulated fee
+            "fee": {"cost": fee, "currency": quote, "rate": fee_rate},
         }
         self._paper_orders.append(order)
 
@@ -723,27 +789,22 @@ class PaperExchangeClient(ExchangeClient):
     def get_paper_pnl(self) -> Dict[str, Any]:
         """Calcule le PnL du paper trading"""
         cfg = get_config()
-        initial = 1000.0  # TODO: rendre configurable
+        initial = 1000.0
         current = self._paper_balance.get(cfg.base_currency, 0.0)
-
-        # Ajouter valorisation des positions
-        # (simplifié - en réalité il faudrait fetch les prix actuels)
-        for pos in self._paper_positions.values():
-            current += pos.get("cost_basis", 0.0)
 
         return {
             "initial_balance": initial,
-            "current_equity": current,
+            "current_usdt": current,
             "pnl_usdt": current - initial,
             "pnl_pct": ((current / initial) - 1) * 100 if initial > 0 else 0,
             "total_trades": len(self._paper_orders),
+            "fees_advantage": "MEXC 0%/0.01% vs OKX 0.08%/0.10% - économies significatives",
         }
 ```
 
 **Critères de validation**:
-- [ ] Prix réels, ordres simulés
-- [ ] Tracking précis des positions et coûts moyens
-- [ ] Simulation des frais (0.1%)
+- [ ] Prix réels MEXC, ordres simulés
+- [ ] Simulation des frais MEXC (0% maker / 0.01% taker)
 - [ ] Calcul du PnL
 - [ ] Pas de modification de l'exchange réel
 
@@ -758,7 +819,7 @@ def create_exchange_client() -> ExchangeClient:
     """
     Factory qui retourne le bon client selon la config.
     - PAPER_TRADING=true -> PaperExchangeClient
-    - PAPER_TRADING=false -> ExchangeClient (réel)
+    - PAPER_TRADING=false -> ExchangeClient (réel MEXC)
     """
     cfg = get_config()
 
@@ -788,31 +849,54 @@ def get_exchange_client() -> ExchangeClient:
 
 ## Checklist Finale Phase 1
 
-- [ ] ExchangeClient avec toutes les méthodes de lecture
-- [ ] Méthodes d'exécution d'ordres (place_order, close_position)
+### Outils OBSERVER
+- [ ] get_market_snapshot - snapshot complet marché
+- [ ] get_orderbook - carnet d'ordres avec spread
+- [ ] get_ticker/get_tickers - prix temps réel
+- [ ] get_ohlcv - chandeliers historiques
+- [ ] get_trending_tokens - gainers/losers
+- [ ] detect_new_listings - nouveaux tokens (spécialité MEXC)
+
+### Outils AGIR (Portfolio)
+- [ ] get_portfolio_state - état portefeuille valorisé
+- [ ] get_balance - balance brute
+- [ ] risk_constraints - limites de risque
+
+### Outils AGIR (Exécution)
+- [ ] place_order - passer des ordres
+- [ ] close_position - fermer une position
+- [ ] cancel_order - annuler un ordre
+
+### Outils RÉFLÉCHIR
+- [ ] ml_estimate_slippage - estimation slippage
+
+### Infrastructure
 - [ ] PaperExchangeClient pour simulation
-- [ ] Détection nouveaux listings
-- [ ] Scan top gainers/losers
-- [ ] Estimation de liquidité
 - [ ] Factory et singleton
 - [ ] Tests unitaires avec mocks CCXT
-- [ ] Documentation des méthodes
 
 ---
 
-## Notes Techniques
+## Notes Techniques MEXC
 
 ### Rate Limits MEXC
 - API publique: 20 req/s
 - API privée: 10 req/s
-- Utiliser `enableRateLimit=True` dans CCXT
+- **Plus stricte que OKX** - utiliser `enableRateLimit=True` obligatoirement
+- Ajouter un délai de 100ms entre les appels si nécessaire
 
 ### Spécificités MEXC
-- Pas de passphrase (contrairement à OKX)
+- **Pas de passphrase** (contrairement à OKX) - juste API key + secret
+- **recvWindow**: Requis, typiquement 60000ms
 - Symboles au format `BASE/QUOTE`
-- Beaucoup de microcaps avec faible liquidité
+- **Beaucoup de microcaps** - attention à la liquidité
 
-### Gestion des Erreurs
+### Avantages MEXC pour notre stratégie
+- **Frais 0% maker** - idéal pour ordres limite
+- **Listings rapides** - tokens dispo avant OKX/Binance
+- **Scalping possible** - petits mouvements rentables grâce aux frais bas
+
+### Gestion des Erreurs MEXC
 ```python
 from ccxt.base.errors import (
     ExchangeError,
@@ -820,7 +904,9 @@ from ccxt.base.errors import (
     InvalidOrder,
     OrderNotFound,
     RateLimitExceeded,
+    RequestTimeout,  # Plus fréquent sur MEXC
 )
 ```
 
-Toujours wrapper les appels CCXT avec try/except appropriés.
+### Instruction System Prompt (à ajouter)
+> "Tu trades sur MEXC. Profite des frais extrêmement bas (0% maker) pour capturer des mouvements de prix plus petits (scalping) si la tendance est incertaine. Surveille les nouveaux listings récents car c'est la spécialité de cet exchange."

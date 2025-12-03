@@ -1,6 +1,26 @@
 # Phase 0 - Setup & Architecture de Base
 
-> **Objectif**: Mettre en place le repository, la structure de fichiers et les configurations de base pour le bot OtterTrend.
+> **Objectif**: Mettre en place le repository, la structure de fichiers et les configurations de base pour le bot OtterTrend - fork conceptuel de gemini-cli avec Groq + MEXC.
+>
+> **Référence**: Conversation ChatGPT - Architecture LLM orchestrateur + mini-ML + outils
+
+## Pourquoi MEXC ?
+
+Pour une stratégie **"1% ROI/jour + Trends SocialFi/Memecoins"** avec un **petit capital**, MEXC est le choix optimal :
+
+| Critère | MEXC 🏆 | OKX | Bybit |
+|---------|---------|-----|-------|
+| **Frais Spot** | **0.00% Maker / 0.01% Taker** | 0.08% / 0.10% | 0.10% / 0.10% |
+| **Vitesse Listing** | **Très rapide (Degen)** | Lente | Moyenne |
+| **Niches SocialFi/Meme** | **Énorme choix** | Faible | Bon |
+| **Liquidité** | Moyenne | Excellent | Excellent |
+
+**Avantages clés pour notre bot :**
+1. **Frais quasi nuls** - Critical pour 10-20 trades/jour
+2. **Listings agressifs** - Tokens SocialFi dispo des semaines avant OKX/Binance
+3. **Scalping possible** - Avec 0% fees maker, petits mouvements rentables
+
+**Note sécurité** : MEXC = plateforme de **transit et d'exécution**, pas de stockage long terme.
 
 ## Statut Global
 - [ ] Phase complète
@@ -13,33 +33,46 @@
 **Priorité**: CRITIQUE
 **Estimation**: Simple
 
-Créer la structure suivante :
+Créer la structure suivante (alignée ChatGPT - Observer/Réfléchir/Agir) :
 ```
 OtterTrend/
-├── main.py                          # Point d'entrée (boucle infinie)
+├── main.py                          # Point d'entrée (boucle autonome)
 ├── requirements.txt                 # Dépendances Python
 ├── .env.example                     # Template des variables d'environnement
 ├── .gitignore                       # Fichiers à ignorer
 ├── src/
 │   ├── __init__.py
+│   ├── config.py                    # Configuration centralisée
 │   ├── client/
 │   │   ├── __init__.py
-│   │   └── groq_adapter.py         # Adaptateur LLM Groq
+│   │   └── groq_adapter.py         # Adaptateur LLM Groq (remplace Gemini)
 │   ├── bot/
 │   │   ├── __init__.py
-│   │   ├── brain.py                # Logique décisionnelle LLM
+│   │   ├── brain.py                # Policy LLM autonome
 │   │   ├── memory.py               # Persistance SQLite3
 │   │   └── loop.py                 # Orchestrateur Observe→Think→Act
 │   ├── tools/
 │   │   ├── __init__.py
-│   │   ├── market.py               # Interface MEXC/CCXT
-│   │   ├── trends.py               # Google Trends + sentiment
-│   │   ├── risk.py                 # Garde-fous hard-coded
-│   │   ├── analytics.py            # ML/Stats basiques
-│   │   └── schemas.py              # Définitions tools LLM
+│   │   │
+│   │   ├── # === OBSERVER (données brutes & trends) ===
+│   │   ├── market.py               # get_market_snapshot, get_orderbook (MEXC/CCXT)
+│   │   ├── trends.py               # get_google_trends, get_trending_tokens
+│   │   ├── social.py               # get_social_mentions, get_social_trending
+│   │   ├── news.py                 # get_crypto_news, get_project_announcements
+│   │   │
+│   │   ├── # === RÉFLÉCHIR (mini-ML spécialisés) ===
+│   │   ├── analytics.py            # ml_detect_regime, ml_forecast_volatility
+│   │   ├── sentiment.py            # ml_score_sentiment, ml_narrative_strength
+│   │   │
+│   │   ├── # === AGIR (portfolio, risk, exécution) ===
+│   │   ├── portfolio.py            # get_portfolio_state, risk_constraints
+│   │   ├── risk.py                 # risk_check_order (garde-fous hard-coded)
+│   │   ├── execution.py            # place_order, close_position (MEXC)
+│   │   │
+│   │   └── schemas.py              # Définitions JSON tools pour Groq
 │   └── ui/
 │       ├── __init__.py
-│       └── renderer.py             # Visualisation Rich CLI
+│       └── renderer.py             # UI Rich (style gemini-cli)
 └── tests/
     ├── __init__.py
     └── ...
@@ -94,23 +127,35 @@ ruff>=0.1.0
 **Estimation**: Simple
 
 ```env
-# === LLM Provider ===
+# === LLM Provider (Groq Free Tier) ===
 GROQ_API_KEY=gsk_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+LLM_MODEL=llama-3.3-70b-versatile   # Meilleur ratio reasoning/vitesse
 
-# === Exchange Configuration ===
-EXCHANGE_ID=mexc                    # mexc | bybit | okx
-EXCHANGE_API_KEY=your_api_key
-EXCHANGE_API_SECRET=your_api_secret
-EXCHANGE_TESTNET=true               # true pour testnet, false pour production
+# === Exchange MEXC (Frais bas + Listings rapides) ===
+MEXC_API_KEY=your_api_key
+MEXC_API_SECRET=your_api_secret
+# Note: MEXC n'a PAS de passphrase (contrairement à OKX)
 
 # === Trading Mode ===
 PAPER_TRADING=true                  # true = simulation, false = réel
 BASE_CURRENCY=USDT
 
 # === Bot Settings ===
-LOOP_INTERVAL_SECONDS=60            # Intervalle entre les cycles
+LOOP_INTERVAL_SECONDS=300           # Intervalle entre les cycles (5min recommandé)
+
+# === Risk Limits (Hard-coded - ChatGPT spec) ===
 MAX_ORDER_USD=20.0                  # Limite absolue par ordre
 MAX_EQUITY_PCT=0.05                 # Max 5% du portefeuille par trade
+MAX_DAILY_LOSS_USD=50.0             # HALT si perte > $50/jour
+MAX_POSITIONS=5                     # Max positions simultanées
+
+# === Narratifs & Trends (ChatGPT spec) ===
+GOOGLE_TRENDS_KEYWORDS=socialfi,ai crypto,memecoin,airdrop,crypto
+SOCIALFI_TOKENS=CYBER,DEGEN,LENS,ID
+
+# === MEXC Spécifique ===
+# Note: Frais 0% maker / 0.01% taker - idéal pour high-frequency trading
+# Note: API plus stricte sur rate limits - délai recommandé entre appels
 ```
 
 **Critères de validation**:
@@ -212,11 +257,10 @@ class Config:
     groq_api_key: str
     llm_model: str = "llama-3.3-70b-versatile"
 
-    # Exchange
-    exchange_id: str
-    exchange_api_key: str
-    exchange_api_secret: str
-    exchange_testnet: bool
+    # Exchange MEXC
+    mexc_api_key: str
+    mexc_api_secret: str
+    # Note: MEXC n'a pas de passphrase
 
     # Trading
     paper_trading: bool
@@ -226,19 +270,22 @@ class Config:
     loop_interval_seconds: int
     max_order_usd: float
     max_equity_pct: float
+    max_daily_loss_usd: float
+    max_positions: int
 
 def load_config() -> Config:
     return Config(
         groq_api_key=os.getenv("GROQ_API_KEY", ""),
-        exchange_id=os.getenv("EXCHANGE_ID", "mexc"),
-        exchange_api_key=os.getenv("EXCHANGE_API_KEY", ""),
-        exchange_api_secret=os.getenv("EXCHANGE_API_SECRET", ""),
-        exchange_testnet=os.getenv("EXCHANGE_TESTNET", "true").lower() == "true",
+        llm_model=os.getenv("LLM_MODEL", "llama-3.3-70b-versatile"),
+        mexc_api_key=os.getenv("MEXC_API_KEY", ""),
+        mexc_api_secret=os.getenv("MEXC_API_SECRET", ""),
         paper_trading=os.getenv("PAPER_TRADING", "true").lower() == "true",
         base_currency=os.getenv("BASE_CURRENCY", "USDT"),
-        loop_interval_seconds=int(os.getenv("LOOP_INTERVAL_SECONDS", "60")),
+        loop_interval_seconds=int(os.getenv("LOOP_INTERVAL_SECONDS", "300")),
         max_order_usd=float(os.getenv("MAX_ORDER_USD", "20.0")),
         max_equity_pct=float(os.getenv("MAX_EQUITY_PCT", "0.05")),
+        max_daily_loss_usd=float(os.getenv("MAX_DAILY_LOSS_USD", "50.0")),
+        max_positions=int(os.getenv("MAX_POSITIONS", "5")),
     )
 
 # Singleton
@@ -280,19 +327,44 @@ from src.client.groq_adapter import GroqAdapter
 from src.bot.loop import TradingBotLoop
 from src.ui.renderer import Renderer
 
-# System Prompt pour le LLM
+# System Prompt pour le LLM (aligné ChatGPT - Bot 100% Autonome)
 SYSTEM_PROMPT = """
-Tu es OtterTrend, un Bot de Trading Autonome spécialisé dans les narratifs SocialFi et Crypto Trends.
-Tu trades sur MEXC (via CCXT) avec un objectif de ROI journalier > 1%.
+Tu es OtterTrend, un Bot de Trading 100% AUTONOME.
 
-RÈGLES DE CONDUITE :
-1. Observe les données marché, tendances Google, et sentiment social via tes outils.
-2. Décide quand ouvrir, ajuster ou fermer des positions.
-3. Respecte TOUJOURS les garde-fous de risque (max $20/ordre, max 5% equity).
-4. Explique ton raisonnement de façon concise avant chaque action.
-5. Exploite les frais bas MEXC pour capturer des micro-mouvements.
-6. Surveille les nouveaux listings et top gainers pour des opportunités "early trend".
-7. Évite les ordres trop gros sur les pairs peu liquides.
+## MISSION
+Maximiser le ROI quotidien (cible >1%) en tradant des narratifs Crypto,
+particulièrement SocialFi, sur MEXC.
+
+## CAPACITÉS
+Tu as accès à des outils pour :
+- OBSERVER : prix, trends Google, mentions sociales, news
+- ANALYSER : régime marché, sentiment, force des narratifs
+- AGIR : passer des ordres, gérer le portfolio
+
+## RÈGLES ABSOLUES
+1. Tu DÉCIDES et AGIS toi-même. Pas de "je recommande".
+2. Tu appelles place_order() directement quand tu veux trader.
+3. La couche risque ajustera ou rejettera si nécessaire.
+4. Tu expliques ton raisonnement AVANT chaque action.
+5. Tu ne dépasses JAMAIS les limites de risque codées.
+
+## AVANTAGES MEXC
+- Frais 0% maker / 0.01% taker - profite pour scalper
+- Listings rapides - tokens dispo avant OKX/Binance
+- Surveille les nouveaux listings car c'est la spécialité de cet exchange
+
+## STRATÉGIE (ChatGPT spec)
+1. Surveille Google Trends pour détecter les narratifs en hausse
+2. Corrèle avec le sentiment social (X, Farcaster)
+3. Entre tôt sur les tokens liés au narratif montant
+4. Sors agressivement quand le narratif sature
+5. Exploite les événements : listings, airdrops, V2
+
+## NARRATIFS À SUIVRE
+- SocialFi (Farcaster, Lens, friend.tech, CyberConnect)
+- AI Crypto (FET, RNDR, AGIX)
+- Memecoins (trends viraux)
+- RWA (tokenisation assets réels)
 
 FORMAT DE RÉPONSE :
 Retourne un JSON avec la clé "actions" contenant tes décisions:
@@ -313,13 +385,13 @@ async def main() -> int:
         print("[ERROR] GROQ_API_KEY manquant dans .env")
         return 1
 
-    if not cfg.paper_trading and not cfg.exchange_api_key:
-        print("[ERROR] EXCHANGE_API_KEY requis en mode live")
+    if not cfg.paper_trading and not cfg.mexc_api_key:
+        print("[ERROR] MEXC_API_KEY requis en mode live")
         return 1
 
     print(f"[INFO] Démarrage OtterTrend")
     print(f"[INFO] Mode: {'PAPER' if cfg.paper_trading else 'LIVE'}")
-    print(f"[INFO] Exchange: {cfg.exchange_id}")
+    print(f"[INFO] Exchange: MEXC (frais 0%/0.01%)")
     print(f"[INFO] Intervalle: {cfg.loop_interval_seconds}s")
 
     # Initialisation des composants
@@ -539,3 +611,10 @@ class TradingBotLoop:
 - Utiliser `asyncio` pour toutes les opérations I/O
 - Préférer les dataclasses aux dicts pour le typage
 - Documenter toutes les fonctions publiques avec docstrings
+
+## Notes MEXC
+
+- **Pas de passphrase** (contrairement à OKX) - juste API key + secret
+- **recvWindow**: Requis dans les options CCXT, typiquement 60000ms
+- **Rate limits plus stricts** - ajouter enableRateLimit=True
+- **Frais 0% maker** - optimiser pour ordres limite quand possible
