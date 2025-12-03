@@ -1308,3 +1308,920 @@ if __name__ == "__main__":
 - [ ] Composants facilement swappables
 - [ ] Validation au démarrage
 - [ ] Logs informatifs sur les composants utilisés
+
+---
+
+## T0.7 - Optimisations Hardware Mac Mini M4 2024
+
+> **Objectif**: Exploiter nativement les capacités hardware du Mac Mini M4 2024 :
+> - **Apple M4 Chip**: 10-core CPU (4 perf + 6 efficiency) @ 4.4GHz
+> - **Neural Engine**: 16-core, 38 TOPS pour ML/AI
+> - **GPU**: 10-core avec ray-tracing hardware
+> - **Mémoire unifiée**: 16-64GB avec bande passante élevée
+> - **Connectivité**: Thunderbolt 4 (40Gb/s), option 10Gb Ethernet
+
+### T0.7.1 - Configurer l'environnement Python optimisé ARM64
+**Priorité**: CRITIQUE
+**Estimation**: Simple
+
+Créer `scripts/setup_m4.sh` pour configurer l'environnement :
+
+```bash
+#!/bin/bash
+# Setup script pour Mac Mini M4 - Python optimisé Apple Silicon
+
+set -e
+
+echo "=== OtterTrend - Setup Mac Mini M4 ==="
+
+# Vérifier qu'on est bien sur Apple Silicon
+if [[ $(uname -m) != "arm64" ]]; then
+    echo "ERROR: Ce script est pour Apple Silicon (arm64) uniquement"
+    exit 1
+fi
+
+# Vérifier la version de macOS (minimum 14.0 Sonoma pour M4)
+MACOS_VERSION=$(sw_vers -productVersion | cut -d. -f1)
+if [[ $MACOS_VERSION -lt 14 ]]; then
+    echo "ERROR: macOS 14+ requis pour M4 (actuel: $(sw_vers -productVersion))"
+    exit 1
+fi
+
+echo "[1/5] Installation de Homebrew packages..."
+brew install python@3.11 libomp
+
+echo "[2/5] Création de l'environnement virtuel..."
+python3.11 -m venv .venv --copies
+source .venv/bin/activate
+
+echo "[3/5] Installation de NumPy avec Accelerate..."
+# NumPy optimisé pour Apple Accelerate (vecLib)
+pip install cython pybind11
+pip install --no-binary :all: numpy
+
+echo "[4/5] Installation des dépendances ML Apple Silicon..."
+pip install mlx mlx-lm  # Apple MLX framework
+pip install coremltools  # Core ML conversion
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+# PyTorch MPS backend activé automatiquement sur Apple Silicon
+
+echo "[5/5] Installation des autres dépendances..."
+pip install -r requirements.txt
+
+echo ""
+echo "=== Setup terminé ==="
+echo "Vérification des optimisations:"
+python -c "
+import numpy as np
+import platform
+
+print(f'Python: {platform.python_version()}')
+print(f'Architecture: {platform.machine()}')
+print(f'NumPy: {np.__version__}')
+print(f'NumPy BLAS: {np.show_config()}')
+
+# Test MLX
+try:
+    import mlx.core as mx
+    print(f'MLX: OK (device: {mx.default_device()})')
+except ImportError:
+    print('MLX: Non installé')
+
+# Test PyTorch MPS
+try:
+    import torch
+    print(f'PyTorch: {torch.__version__}')
+    print(f'MPS disponible: {torch.backends.mps.is_available()}')
+except ImportError:
+    print('PyTorch: Non installé')
+
+# Test Core ML
+try:
+    import coremltools as ct
+    print(f'CoreML Tools: {ct.__version__}')
+except ImportError:
+    print('CoreML Tools: Non installé')
+"
+```
+
+**Critères de validation**:
+- [ ] Script exécutable sur Mac Mini M4
+- [ ] NumPy compilé avec Accelerate (vecLib)
+- [ ] MLX installé et fonctionnel
+- [ ] PyTorch avec backend MPS
+- [ ] coremltools installé
+
+---
+
+### T0.7.2 - Créer le module de détection hardware
+**Priorité**: HAUTE
+**Estimation**: Simple
+
+Créer `src/hardware.py` pour détecter et exposer les capacités :
+
+```python
+"""
+Détection et exposition des capacités hardware Mac Mini M4.
+Permet d'adapter automatiquement les algorithmes aux ressources disponibles.
+"""
+
+import platform
+import os
+from dataclasses import dataclass
+from typing import Optional
+from enum import Enum
+
+
+class ComputeBackend(Enum):
+    """Backends de calcul disponibles"""
+    CPU = "cpu"
+    MPS = "mps"  # Metal Performance Shaders (GPU Apple)
+    MLX = "mlx"  # Apple MLX framework
+    COREML = "coreml"  # Core ML (Neural Engine)
+
+
+@dataclass
+class HardwareCapabilities:
+    """Capacités hardware détectées"""
+    is_apple_silicon: bool
+    chip_name: str  # "M4", "M4 Pro", etc.
+    cpu_cores: int
+    cpu_perf_cores: int
+    cpu_eff_cores: int
+    gpu_cores: int
+    neural_engine_cores: int
+    neural_engine_tops: float  # Trillion ops/sec
+    unified_memory_gb: int
+    memory_bandwidth_gbps: float
+    has_mps: bool
+    has_mlx: bool
+    has_coreml: bool
+    macos_version: str
+    recommended_backend: ComputeBackend
+
+
+def detect_hardware() -> HardwareCapabilities:
+    """
+    Détecte les capacités hardware du Mac.
+    Optimisé pour Mac Mini M4 2024.
+    """
+    is_apple_silicon = platform.machine() == "arm64"
+    macos_version = platform.mac_ver()[0]
+
+    # Détection du chip Apple
+    chip_name = "Unknown"
+    cpu_cores = os.cpu_count() or 1
+    cpu_perf_cores = 0
+    cpu_eff_cores = 0
+    gpu_cores = 0
+    neural_engine_cores = 0
+    neural_engine_tops = 0.0
+    memory_gb = 0
+    memory_bandwidth = 0.0
+
+    if is_apple_silicon:
+        # Utiliser sysctl pour obtenir les infos détaillées
+        try:
+            import subprocess
+
+            # Nom du chip
+            result = subprocess.run(
+                ["sysctl", "-n", "machdep.cpu.brand_string"],
+                capture_output=True, text=True
+            )
+            chip_name = result.stdout.strip()
+
+            # Détecter le modèle M4
+            if "M4 Pro" in chip_name:
+                cpu_perf_cores = 10
+                cpu_eff_cores = 4
+                gpu_cores = 16 if "16" in chip_name else 20
+                neural_engine_cores = 16
+                neural_engine_tops = 38.0
+            elif "M4 Max" in chip_name:
+                cpu_perf_cores = 12
+                cpu_eff_cores = 4
+                gpu_cores = 40
+                neural_engine_cores = 16
+                neural_engine_tops = 38.0
+            elif "M4" in chip_name:
+                cpu_perf_cores = 4
+                cpu_eff_cores = 6
+                gpu_cores = 10
+                neural_engine_cores = 16
+                neural_engine_tops = 38.0
+            else:
+                # Fallback pour M1/M2/M3
+                cpu_perf_cores = cpu_cores // 2
+                cpu_eff_cores = cpu_cores - cpu_perf_cores
+                gpu_cores = 8
+                neural_engine_cores = 16
+                neural_engine_tops = 15.8  # M1 baseline
+
+            # Mémoire
+            result = subprocess.run(
+                ["sysctl", "-n", "hw.memsize"],
+                capture_output=True, text=True
+            )
+            memory_gb = int(result.stdout.strip()) // (1024 ** 3)
+
+            # Bande passante estimée (selon chip)
+            if "M4 Pro" in chip_name:
+                memory_bandwidth = 273.0  # GB/s
+            elif "M4 Max" in chip_name:
+                memory_bandwidth = 546.0  # GB/s
+            elif "M4" in chip_name:
+                memory_bandwidth = 120.0  # GB/s
+            else:
+                memory_bandwidth = 100.0  # Fallback
+
+        except Exception:
+            pass
+
+    # Vérifier les backends disponibles
+    has_mps = False
+    has_mlx = False
+    has_coreml = False
+
+    try:
+        import torch
+        has_mps = torch.backends.mps.is_available()
+    except ImportError:
+        pass
+
+    try:
+        import mlx.core as mx
+        has_mlx = True
+    except ImportError:
+        pass
+
+    try:
+        import coremltools
+        has_coreml = True
+    except ImportError:
+        pass
+
+    # Recommander le meilleur backend
+    if has_mlx and is_apple_silicon:
+        recommended = ComputeBackend.MLX
+    elif has_mps and is_apple_silicon:
+        recommended = ComputeBackend.MPS
+    elif has_coreml and is_apple_silicon:
+        recommended = ComputeBackend.COREML
+    else:
+        recommended = ComputeBackend.CPU
+
+    return HardwareCapabilities(
+        is_apple_silicon=is_apple_silicon,
+        chip_name=chip_name,
+        cpu_cores=cpu_cores,
+        cpu_perf_cores=cpu_perf_cores,
+        cpu_eff_cores=cpu_eff_cores,
+        gpu_cores=gpu_cores,
+        neural_engine_cores=neural_engine_cores,
+        neural_engine_tops=neural_engine_tops,
+        unified_memory_gb=memory_gb,
+        memory_bandwidth_gbps=memory_bandwidth,
+        has_mps=has_mps,
+        has_mlx=has_mlx,
+        has_coreml=has_coreml,
+        macos_version=macos_version,
+        recommended_backend=recommended,
+    )
+
+
+# Singleton
+_hardware: Optional[HardwareCapabilities] = None
+
+
+def get_hardware() -> HardwareCapabilities:
+    """Retourne les capacités hardware (singleton)"""
+    global _hardware
+    if _hardware is None:
+        _hardware = detect_hardware()
+    return _hardware
+
+
+def print_hardware_info() -> None:
+    """Affiche les infos hardware"""
+    hw = get_hardware()
+    print("=== Hardware Capabilities ===")
+    print(f"Chip: {hw.chip_name}")
+    print(f"Apple Silicon: {hw.is_apple_silicon}")
+    print(f"CPU: {hw.cpu_cores} cores ({hw.cpu_perf_cores}P + {hw.cpu_eff_cores}E)")
+    print(f"GPU: {hw.gpu_cores} cores")
+    print(f"Neural Engine: {hw.neural_engine_cores} cores ({hw.neural_engine_tops} TOPS)")
+    print(f"Memory: {hw.unified_memory_gb}GB @ {hw.memory_bandwidth_gbps}GB/s")
+    print(f"macOS: {hw.macos_version}")
+    print(f"Backends: MPS={hw.has_mps}, MLX={hw.has_mlx}, CoreML={hw.has_coreml}")
+    print(f"Recommended: {hw.recommended_backend.value}")
+```
+
+**Critères de validation**:
+- [ ] Détection correcte du M4/M4 Pro/M4 Max
+- [ ] Enumération des cores CPU/GPU/Neural Engine
+- [ ] Détection des backends disponibles
+- [ ] Recommandation automatique du meilleur backend
+- [ ] Tests sur différents chips Apple Silicon
+
+---
+
+### T0.7.3 - Ajouter les dépendances hardware au requirements.txt
+**Priorité**: HAUTE
+**Estimation**: Simple
+
+Modifier `requirements.txt` pour inclure les packages Apple Silicon :
+
+```python
+# === Core Dependencies ===
+python-dotenv>=1.0.0
+requests>=2.31.0
+
+# === Exchange & Market Data ===
+ccxt>=4.0.0
+aiohttp>=3.9.0
+
+# === LLM ===
+groq>=0.4.0
+
+# === Trends & News ===
+pytrends>=4.9.0
+
+# === UI ===
+rich>=13.0.0
+
+# === Testing ===
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+
+# === Apple Silicon Optimizations (Mac Mini M4) ===
+# NumPy sera compilé avec Accelerate via setup script
+numpy>=1.26.0
+
+# MLX - Apple's ML framework pour Apple Silicon
+# Installation conditionnelle: pip install mlx mlx-lm
+mlx>=0.21.0; sys_platform == 'darwin' and platform_machine == 'arm64'
+mlx-lm>=0.20.0; sys_platform == 'darwin' and platform_machine == 'arm64'
+
+# Core ML Tools - Conversion de modèles pour Neural Engine
+coremltools>=8.0; sys_platform == 'darwin'
+
+# PyTorch avec MPS backend (Metal Performance Shaders)
+torch>=2.4.0
+torchvision>=0.19.0
+
+# Transformers pour modèles NLP (FinBERT, etc.)
+transformers>=4.44.0
+tokenizers>=0.19.0
+
+# === Async & Performance ===
+uvloop>=0.19.0; sys_platform != 'win32'  # Event loop optimisé
+orjson>=3.9.0  # JSON rapide (10x plus rapide que json)
+
+# === Database ===
+aiosqlite>=0.19.0  # SQLite async
+
+# === Monitoring (optionnel) ===
+psutil>=5.9.0  # Monitoring système
+```
+
+**Critères de validation**:
+- [ ] Dépendances conditionnelles pour macOS/ARM64
+- [ ] MLX et mlx-lm installés sur Apple Silicon
+- [ ] coremltools pour conversion Core ML
+- [ ] uvloop pour event loop optimisé
+- [ ] orjson pour parsing JSON rapide
+
+---
+
+### T0.7.4 - Créer les interfaces hardware-aware
+**Priorité**: HAUTE
+**Estimation**: Moyenne
+
+Ajouter à `src/interfaces.py` les interfaces pour l'accélération hardware :
+
+```python
+# === HARDWARE ACCELERATION INTERFACES ===
+
+class BaseMLAccelerator(ABC):
+    """
+    Interface pour les accélérateurs ML.
+    Permet de swapper MLX ↔ PyTorch MPS ↔ Core ML ↔ CPU.
+    """
+
+    @property
+    @abstractmethod
+    def backend_name(self) -> str:
+        """Nom du backend (mlx, mps, coreml, cpu)"""
+        ...
+
+    @property
+    @abstractmethod
+    def device(self) -> str:
+        """Device utilisé pour le calcul"""
+        ...
+
+    @abstractmethod
+    def is_available(self) -> bool:
+        """Vérifie si le backend est disponible"""
+        ...
+
+    @abstractmethod
+    def to_device(self, data: Any) -> Any:
+        """Transfère les données vers le device"""
+        ...
+
+    @abstractmethod
+    def matmul(self, a: Any, b: Any) -> Any:
+        """Multiplication matricielle accélérée"""
+        ...
+
+    @abstractmethod
+    def inference(self, model: Any, inputs: Any) -> Any:
+        """Inférence sur le modèle"""
+        ...
+
+
+class BaseNeuralEngineModel(ABC):
+    """
+    Interface pour les modèles optimisés Neural Engine (Core ML).
+    16 TOPS sur M4 - idéal pour inférence ML temps réel.
+    """
+
+    @abstractmethod
+    def load_model(self, model_path: str) -> None:
+        """Charge un modèle Core ML (.mlpackage)"""
+        ...
+
+    @abstractmethod
+    def predict(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        """Exécute une prédiction sur le Neural Engine"""
+        ...
+
+    @abstractmethod
+    def get_model_info(self) -> Dict[str, Any]:
+        """Retourne les infos du modèle (inputs, outputs, compute units)"""
+        ...
+
+    @property
+    @abstractmethod
+    def compute_units(self) -> str:
+        """Retourne les unités de calcul utilisées (ALL, CPU_AND_NE, CPU_ONLY)"""
+        ...
+
+
+class BaseVectorStore(ABC):
+    """
+    Interface pour le stockage vectoriel.
+    Utilise la mémoire unifiée pour zero-copy entre CPU/GPU/Neural Engine.
+    """
+
+    @abstractmethod
+    def add_vectors(self, vectors: Any, metadata: List[Dict]) -> List[str]:
+        """Ajoute des vecteurs avec métadonnées"""
+        ...
+
+    @abstractmethod
+    def search(self, query_vector: Any, top_k: int = 10) -> List[Dict]:
+        """Recherche les vecteurs les plus proches"""
+        ...
+
+    @abstractmethod
+    def delete(self, ids: List[str]) -> None:
+        """Supprime des vecteurs par ID"""
+        ...
+
+    @property
+    @abstractmethod
+    def count(self) -> int:
+        """Nombre de vecteurs stockés"""
+        ...
+```
+
+**Critères de validation**:
+- [ ] Interface BaseMLAccelerator pour abstraction backend
+- [ ] Interface BaseNeuralEngineModel pour Core ML
+- [ ] Interface BaseVectorStore pour embeddings
+- [ ] Documentation des use cases
+
+---
+
+### T0.7.5 - Créer le module d'accélération MLX
+**Priorité**: HAUTE
+**Estimation**: Moyenne
+
+Créer `src/accelerators/mlx_backend.py` :
+
+```python
+"""
+Backend MLX pour calculs ML accélérés sur Apple Silicon.
+MLX est optimisé pour la mémoire unifiée et le lazy evaluation.
+"""
+
+from typing import Any, Dict, List, Optional
+import numpy as np
+
+from src.interfaces import BaseMLAccelerator
+from src.hardware import get_hardware, ComputeBackend
+
+
+class MLXAccelerator(BaseMLAccelerator):
+    """
+    Accélérateur utilisant Apple MLX.
+
+    Avantages MLX vs PyTorch:
+    - Mémoire unifiée (zero-copy CPU↔GPU)
+    - Lazy evaluation (graphe dynamique)
+    - API NumPy-like
+    - Optimisé pour Apple Silicon
+    """
+
+    def __init__(self) -> None:
+        self._available = False
+        self._mx = None
+        self._nn = None
+
+        try:
+            import mlx.core as mx
+            import mlx.nn as nn
+            self._mx = mx
+            self._nn = nn
+            self._available = True
+        except ImportError:
+            pass
+
+    @property
+    def backend_name(self) -> str:
+        return "mlx"
+
+    @property
+    def device(self) -> str:
+        if self._available:
+            return str(self._mx.default_device())
+        return "cpu"
+
+    def is_available(self) -> bool:
+        return self._available and get_hardware().is_apple_silicon
+
+    def to_device(self, data: Any) -> Any:
+        """Convertit numpy array en MLX array"""
+        if not self._available:
+            return data
+
+        if isinstance(data, np.ndarray):
+            return self._mx.array(data)
+        return data
+
+    def to_numpy(self, data: Any) -> np.ndarray:
+        """Convertit MLX array en numpy"""
+        if self._available and hasattr(data, 'tolist'):
+            return np.array(data.tolist())
+        return data
+
+    def matmul(self, a: Any, b: Any) -> Any:
+        """Multiplication matricielle sur GPU Apple"""
+        if not self._available:
+            return np.matmul(a, b)
+
+        a_mlx = self.to_device(a)
+        b_mlx = self.to_device(b)
+        result = self._mx.matmul(a_mlx, b_mlx)
+        self._mx.eval(result)  # Force l'évaluation (lazy evaluation)
+        return result
+
+    def inference(self, model: Any, inputs: Any) -> Any:
+        """Inférence MLX"""
+        if not self._available:
+            raise RuntimeError("MLX non disponible")
+
+        inputs_mlx = self.to_device(inputs)
+        output = model(inputs_mlx)
+        self._mx.eval(output)
+        return output
+
+    # === OPÉRATIONS SPÉCIALISÉES POUR LE BOT ===
+
+    def softmax(self, x: Any, axis: int = -1) -> Any:
+        """Softmax accéléré"""
+        if not self._available:
+            # Fallback numpy
+            exp_x = np.exp(x - np.max(x, axis=axis, keepdims=True))
+            return exp_x / np.sum(exp_x, axis=axis, keepdims=True)
+
+        x_mlx = self.to_device(x)
+        return self._mx.softmax(x_mlx, axis=axis)
+
+    def cosine_similarity(self, a: Any, b: Any) -> float:
+        """Similarité cosinus accélérée (pour embeddings)"""
+        if not self._available:
+            a_norm = a / np.linalg.norm(a)
+            b_norm = b / np.linalg.norm(b)
+            return float(np.dot(a_norm, b_norm))
+
+        a_mlx = self.to_device(a)
+        b_mlx = self.to_device(b)
+
+        a_norm = a_mlx / self._mx.linalg.norm(a_mlx)
+        b_norm = b_mlx / self._mx.linalg.norm(b_mlx)
+        result = self._mx.sum(a_norm * b_norm)
+        self._mx.eval(result)
+        return float(result.item())
+
+    def batch_cosine_similarity(
+        self, query: Any, vectors: Any
+    ) -> List[float]:
+        """Similarité cosinus batch (pour recherche vectorielle)"""
+        if not self._available:
+            query_norm = query / np.linalg.norm(query)
+            vectors_norm = vectors / np.linalg.norm(vectors, axis=1, keepdims=True)
+            return (vectors_norm @ query_norm).tolist()
+
+        query_mlx = self.to_device(query)
+        vectors_mlx = self.to_device(vectors)
+
+        query_norm = query_mlx / self._mx.linalg.norm(query_mlx)
+        vectors_norm = vectors_mlx / self._mx.linalg.norm(vectors_mlx, axis=1, keepdims=True)
+        result = vectors_norm @ query_norm
+        self._mx.eval(result)
+        return result.tolist()
+
+
+# Factory
+def get_mlx_accelerator() -> Optional[MLXAccelerator]:
+    """Retourne l'accélérateur MLX si disponible"""
+    acc = MLXAccelerator()
+    return acc if acc.is_available() else None
+```
+
+**Critères de validation**:
+- [ ] Backend MLX fonctionnel
+- [ ] Fallback numpy si MLX non dispo
+- [ ] Opérations optimisées (matmul, softmax, cosine)
+- [ ] Zero-copy avec mémoire unifiée
+- [ ] Tests de performance vs numpy
+
+---
+
+### T0.7.6 - Créer le module Core ML pour Neural Engine
+**Priorité**: HAUTE
+**Estimation**: Moyenne
+
+Créer `src/accelerators/coreml_backend.py` :
+
+```python
+"""
+Backend Core ML pour inférence sur le Neural Engine (16 cores, 38 TOPS sur M4).
+Idéal pour les modèles de sentiment analysis et classification.
+"""
+
+from typing import Any, Dict, Optional
+from pathlib import Path
+import numpy as np
+
+from src.interfaces import BaseNeuralEngineModel
+from src.hardware import get_hardware
+
+
+class CoreMLModel(BaseNeuralEngineModel):
+    """
+    Wrapper pour modèles Core ML (.mlpackage/.mlmodel).
+
+    Le Neural Engine du M4 offre:
+    - 16 cores dédiés ML
+    - 38 TOPS (trillion operations per second)
+    - Efficacité énergétique optimale
+    - Inférence ~10x plus rapide que CPU pour transformers
+    """
+
+    def __init__(
+        self,
+        compute_units: str = "ALL",  # ALL, CPU_AND_NE, CPU_ONLY
+    ) -> None:
+        self._model = None
+        self._model_path: Optional[str] = None
+        self._compute_units = compute_units
+        self._ct = None
+
+        try:
+            import coremltools as ct
+            self._ct = ct
+        except ImportError:
+            pass
+
+    def load_model(self, model_path: str) -> None:
+        """Charge un modèle Core ML"""
+        if self._ct is None:
+            raise RuntimeError("coremltools non installé")
+
+        path = Path(model_path)
+        if not path.exists():
+            raise FileNotFoundError(f"Modèle non trouvé: {model_path}")
+
+        # Mapper les compute units
+        compute_map = {
+            "ALL": self._ct.ComputeUnit.ALL,
+            "CPU_AND_NE": self._ct.ComputeUnit.CPU_AND_NE,
+            "CPU_ONLY": self._ct.ComputeUnit.CPU_ONLY,
+            "CPU_AND_GPU": self._ct.ComputeUnit.CPU_AND_GPU,
+        }
+        compute_unit = compute_map.get(self._compute_units, self._ct.ComputeUnit.ALL)
+
+        self._model = self._ct.models.MLModel(
+            str(path),
+            compute_units=compute_unit,
+        )
+        self._model_path = model_path
+
+    def predict(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        """Exécute une prédiction sur le Neural Engine"""
+        if self._model is None:
+            raise RuntimeError("Aucun modèle chargé")
+
+        # Convertir les numpy arrays en format Core ML
+        coreml_inputs = {}
+        for key, value in inputs.items():
+            if isinstance(value, np.ndarray):
+                coreml_inputs[key] = value
+            else:
+                coreml_inputs[key] = np.array(value)
+
+        # Prédiction
+        output = self._model.predict(coreml_inputs)
+        return dict(output)
+
+    def get_model_info(self) -> Dict[str, Any]:
+        """Retourne les infos du modèle"""
+        if self._model is None:
+            return {"error": "Aucun modèle chargé"}
+
+        spec = self._model.get_spec()
+        return {
+            "path": self._model_path,
+            "compute_units": self._compute_units,
+            "inputs": [
+                {"name": inp.name, "type": str(inp.type)}
+                for inp in spec.description.input
+            ],
+            "outputs": [
+                {"name": out.name, "type": str(out.type)}
+                for out in spec.description.output
+            ],
+        }
+
+    @property
+    def compute_units(self) -> str:
+        return self._compute_units
+
+
+class CoreMLSentimentModel(CoreMLModel):
+    """
+    Modèle de sentiment spécialisé pour Core ML.
+    Optimisé pour DistilBERT/FinBERT sur Neural Engine.
+    """
+
+    def __init__(self, model_path: Optional[str] = None) -> None:
+        super().__init__(compute_units="CPU_AND_NE")  # Neural Engine prioritaire
+        if model_path:
+            self.load_model(model_path)
+
+    def analyze_sentiment(self, text: str, tokenizer: Any) -> Dict[str, Any]:
+        """
+        Analyse le sentiment d'un texte.
+
+        Args:
+            text: Texte à analyser
+            tokenizer: Tokenizer HuggingFace
+
+        Returns:
+            {"label": "positive"|"negative"|"neutral", "score": float}
+        """
+        if self._model is None:
+            raise RuntimeError("Modèle non chargé")
+
+        # Tokenization
+        tokens = tokenizer(
+            text,
+            max_length=128,
+            padding="max_length",
+            truncation=True,
+            return_tensors="np",
+        )
+
+        # Prédiction sur Neural Engine
+        outputs = self.predict({
+            "input_ids": tokens["input_ids"].astype(np.int32),
+            "attention_mask": tokens["attention_mask"].astype(np.int32),
+        })
+
+        # Post-processing
+        logits = outputs.get("logits", outputs.get("output", None))
+        if logits is None:
+            return {"error": "Output 'logits' non trouvé"}
+
+        probs = self._softmax(logits[0])
+        pred_idx = int(np.argmax(probs))
+
+        labels = ["negative", "neutral", "positive"]
+        return {
+            "label": labels[pred_idx],
+            "score": float(probs[pred_idx]),
+            "scores": {
+                "negative": float(probs[0]),
+                "neutral": float(probs[1]),
+                "positive": float(probs[2]),
+            },
+        }
+
+    def _softmax(self, x: np.ndarray) -> np.ndarray:
+        exp_x = np.exp(x - np.max(x))
+        return exp_x / np.sum(exp_x)
+
+
+# === CONVERSION DE MODÈLES ===
+
+def convert_huggingface_to_coreml(
+    model_name: str,
+    output_path: str,
+    sequence_length: int = 128,
+) -> str:
+    """
+    Convertit un modèle HuggingFace en Core ML.
+
+    Args:
+        model_name: Nom du modèle HF (ex: "ProsusAI/finbert")
+        output_path: Chemin de sortie (.mlpackage)
+        sequence_length: Longueur max des séquences
+
+    Returns:
+        Chemin du modèle converti
+    """
+    try:
+        import coremltools as ct
+        from transformers import AutoModelForSequenceClassification, AutoTokenizer
+        import torch
+    except ImportError as e:
+        raise ImportError(f"Dépendances manquantes: {e}")
+
+    print(f"[CoreML] Chargement de {model_name}...")
+    model = AutoModelForSequenceClassification.from_pretrained(model_name)
+    model.eval()
+
+    print("[CoreML] Traçage du modèle...")
+    # Créer des inputs factices
+    dummy_input_ids = torch.zeros(1, sequence_length, dtype=torch.int32)
+    dummy_attention_mask = torch.ones(1, sequence_length, dtype=torch.int32)
+
+    # Tracer le modèle
+    traced_model = torch.jit.trace(
+        model,
+        (dummy_input_ids, dummy_attention_mask),
+    )
+
+    print("[CoreML] Conversion en Core ML...")
+    mlmodel = ct.convert(
+        traced_model,
+        inputs=[
+            ct.TensorType(name="input_ids", shape=(1, sequence_length), dtype=np.int32),
+            ct.TensorType(name="attention_mask", shape=(1, sequence_length), dtype=np.int32),
+        ],
+        outputs=[ct.TensorType(name="logits")],
+        compute_precision=ct.precision.FLOAT16,  # FP16 pour Neural Engine
+        minimum_deployment_target=ct.target.macOS14,
+    )
+
+    print(f"[CoreML] Sauvegarde vers {output_path}...")
+    mlmodel.save(output_path)
+
+    return output_path
+
+
+# Factory
+def get_coreml_sentiment_model(
+    model_path: Optional[str] = None,
+) -> Optional[CoreMLSentimentModel]:
+    """
+    Retourne un modèle de sentiment Core ML.
+    Crée le modèle si nécessaire.
+    """
+    hw = get_hardware()
+    if not hw.has_coreml or not hw.is_apple_silicon:
+        return None
+
+    default_path = "models/finbert_sentiment.mlpackage"
+    path = model_path or default_path
+
+    if not Path(path).exists():
+        print(f"[CoreML] Modèle non trouvé: {path}")
+        print("[CoreML] Utilisez convert_huggingface_to_coreml() pour le créer")
+        return None
+
+    model = CoreMLSentimentModel(path)
+    return model
+```
+
+**Critères de validation**:
+- [ ] Chargement de modèles Core ML
+- [ ] Prédiction sur Neural Engine
+- [ ] Conversion HuggingFace → Core ML
+- [ ] ~10x plus rapide que CPU pour transformers
+- [ ] Tests avec FinBERT

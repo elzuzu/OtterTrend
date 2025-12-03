@@ -82,6 +82,12 @@ Phase 0 (Setup)
 | T0.3.1 | Implémenter src/bot/memory.py (SQLite) | CRITIQUE | 🔴 |
 | T0.4.1 | Implémenter src/client/groq_adapter.py | CRITIQUE | 🔴 |
 | T0.5.1 | Implémenter src/bot/loop.py (squelette) | CRITIQUE | 🔴 |
+| T0.7.1 | Setup script Mac Mini M4 ARM64 | HAUTE | 🔴 |
+| T0.7.2 | Module détection hardware (src/hardware.py) | HAUTE | 🔴 |
+| T0.7.3 | Requirements Apple Silicon (MLX, Core ML) | HAUTE | 🔴 |
+| T0.7.4 | Interfaces accélérateurs hardware | HAUTE | 🔴 |
+| T0.7.5 | Backend MLX (src/accelerators/mlx_backend.py) | HAUTE | 🔴 |
+| T0.7.6 | Backend Core ML (src/accelerators/coreml_backend.py) | HAUTE | 🔴 |
 
 ---
 
@@ -115,6 +121,12 @@ Phase 0 (Setup)
 | T2.3.1 | Architecture Twitter (stub) | BASSE | 🔴 |
 | T2.4.1 | Snapshot tendances unifié | CRITIQUE | 🔴 |
 | T2.5.1 | Analytics basiques | MOYENNE | 🔴 |
+| T2.7.1 | MLXSentimentAnalyzer (Apple Silicon) | HAUTE | 🔴 |
+| T2.7.2 | CoreMLSentimentAnalyzer (Neural Engine) | HAUTE | 🔴 |
+| T2.7.3 | Accélération calculs vectoriels MLX | MOYENNE | 🔴 |
+| T2.7.4 | TrendAnalyzer avec auto-backend hardware | MOYENNE | 🔴 |
+| T2.7.5 | Script benchmark backends sentiment | BASSE | 🔴 |
+| T2.7.6 | Factory backends hardware | HAUTE | 🔴 |
 
 ---
 
@@ -305,6 +317,57 @@ OtterTrend/
 
 ---
 
+## Hardware Cible: Mac Mini M4 2024
+
+> **Objectif**: Exploiter nativement les capacités hardware du Mac Mini M4 pour des performances optimales.
+
+### Spécifications M4
+
+| Composant | Spec M4 | Utilisation OtterTrend |
+|-----------|---------|------------------------|
+| **CPU** | 10-core (4P + 6E) @ 4.4GHz | Async I/O, orchestration |
+| **GPU** | 10-core Metal | MLX inference, calculs vectoriels |
+| **Neural Engine** | 16-core, 38 TOPS | Core ML sentiment analysis |
+| **RAM** | 16-64GB Unified | Zero-copy ML inference |
+| **Bandwidth** | 120 GB/s (273 GB/s M4 Pro) | Large batch processing |
+
+### Frameworks Apple Silicon
+
+| Framework | Usage | Avantage |
+|-----------|-------|----------|
+| **MLX** | Sentiment analysis, embeddings | Zero-copy unified memory, lazy eval |
+| **Core ML** | FinBERT inference | Neural Engine 38 TOPS, basse latence |
+| **Metal/MPS** | PyTorch fallback | GPU acceleration |
+| **Accelerate/vecLib** | NumPy operations | BLAS/LAPACK optimisé Apple |
+
+### Performance Attendue
+
+| Opération | CPU Baseline | Avec Hardware M4 | Speedup |
+|-----------|--------------|------------------|---------|
+| Sentiment (100 news) | ~2000ms | ~200ms (MLX) | **10x** |
+| Cosine similarity (10K vectors) | ~50ms | ~5ms (MLX) | **10x** |
+| FinBERT inference | ~500ms | ~50ms (Core ML) | **10x** |
+| RSI/Volatility batch | ~10ms | ~2ms (MLX) | **5x** |
+
+### Fichiers Hardware
+
+```
+src/
+├── hardware.py              # Détection M4, capabilities
+├── accelerators/
+│   ├── __init__.py
+│   ├── mlx_backend.py       # MLX array operations
+│   ├── mlx_sentiment.py     # MLXSentimentAnalyzer
+│   └── coreml_sentiment.py  # CoreMLSentimentAnalyzer
+├── models/
+│   └── finbert_sentiment.mlpackage  # Core ML model
+scripts/
+├── setup_m4.sh              # Setup Python ARM64 optimisé
+├── convert_to_coreml.py     # Conversion HuggingFace → Core ML
+└── benchmark_sentiment.py   # Benchmark backends
+
+---
+
 ## Architecture Modulaire
 
 > **Principe**: Chaque composant majeur est interchangeable via des interfaces abstraites.
@@ -318,10 +381,13 @@ OtterTrend/
 | `BaseLLMAdapter` | GroqAdapter | OpenAIAdapter, AnthropicAdapter, LocalLLM |
 | `BaseTrendsProvider` | GoogleTrendsProvider | TwitterTrendsProvider |
 | `BaseNewsProvider` | CryptoCompareProvider | CoinGeckoProvider, RSSProvider |
-| `BaseSentimentAnalyzer` | RuleBasedSentiment | FinBERTSentiment, GPTSentiment |
+| `BaseSentimentAnalyzer` | RuleBasedSentiment | **MLXSentiment**, **CoreMLSentiment**, FinBERTSentiment |
 | `BaseRiskManager` | DefaultRiskManager | ConservativeRiskManager, AggressiveRiskManager |
 | `BaseMemory` | SQLiteMemory | PostgresMemory, RedisMemory |
 | `BaseTool` | (tous les tools) | Custom tools |
+| `BaseMLAccelerator` | MLXAccelerator (M4) | NumPyAccelerator (fallback) |
+| `BaseNeuralEngineModel` | CoreMLModel (M4) | PyTorchModel (fallback) |
+| `BaseVectorStore` | MLXVectorStore (M4) | NumPyVectorStore (fallback) |
 
 ### Patterns de Modularité
 

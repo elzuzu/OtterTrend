@@ -1240,3 +1240,861 @@ def create_sentiment_analyzer(name: str = "rules", **kwargs) -> BaseSentimentAna
 - [ ] Registres extensibles
 - [ ] Factories avec détection automatique
 - [ ] Placeholders pour futures implémentations
+
+---
+
+## T2.7 - Accélération Hardware Mac Mini M4
+
+> **Objectif**: Intégrer les optimisations Apple Silicon pour l'analyse de sentiment et les calculs vectoriels.
+> Exploite le Neural Engine (38 TOPS), MLX, et Core ML pour des inférences rapides.
+
+### T2.7.1 - Implémenter MLXSentimentAnalyzer (BaseSentimentAnalyzer)
+**Priorité**: HAUTE
+**Estimation**: Moyenne
+
+Créer `src/accelerators/mlx_sentiment.py` avec analyse de sentiment accélérée MLX :
+
+```python
+"""
+Analyseur de sentiment utilisant MLX pour Apple Silicon.
+Charge des modèles optimisés (DistilBERT/FinBERT) via mlx-lm.
+"""
+
+from typing import Any, Dict, List, Optional
+import sys
+
+from src.interfaces import BaseSentimentAnalyzer
+from src.hardware import detect_hardware, ComputeBackend
+
+
+class MLXSentimentAnalyzer(BaseSentimentAnalyzer):
+    """
+    Analyseur de sentiment utilisant MLX sur Apple Silicon.
+
+    Avantages:
+    - Zero-copy unified memory (pas de transfert CPU<->GPU)
+    - Lazy evaluation pour optimisation automatique
+    - ~5-10x plus rapide que CPU pour transformers
+
+    Modèles supportés:
+    - distilbert-base-uncased-finetuned-sst-2-english (général)
+    - ProsusAI/finbert (finance/crypto spécialisé)
+    """
+
+    def __init__(
+        self,
+        model_name: str = "distilbert-base-uncased-finetuned-sst-2-english",
+        max_length: int = 128,
+    ) -> None:
+        self._model_name = model_name
+        self._max_length = max_length
+        self._model = None
+        self._tokenizer = None
+        self._initialized = False
+
+        # Vérifier que MLX est disponible
+        hw = detect_hardware()
+        if not hw.has_mlx:
+            raise RuntimeError(
+                "MLX non disponible. Utiliser RuleBasedSentiment ou "
+                "CoreMLSentimentAnalyzer comme fallback."
+            )
+
+    @property
+    def name(self) -> str:
+        return f"mlx_{self._model_name.split('/')[-1]}"
+
+    def _lazy_init(self) -> None:
+        """Initialisation paresseuse du modèle (premier appel)"""
+        if self._initialized:
+            return
+
+        try:
+            import mlx.core as mx
+            import mlx.nn as nn
+            from mlx_lm import load, generate
+            from transformers import AutoTokenizer
+
+            # Charger le tokenizer HuggingFace
+            self._tokenizer = AutoTokenizer.from_pretrained(self._model_name)
+
+            # Charger le modèle MLX (conversion automatique si nécessaire)
+            self._model, _ = load(self._model_name)
+
+            self._initialized = True
+
+        except ImportError as e:
+            raise RuntimeError(f"Dépendances MLX manquantes: {e}")
+        except Exception as e:
+            raise RuntimeError(f"Erreur chargement modèle MLX: {e}")
+
+    def analyze(self, text: str) -> Dict[str, Any]:
+        """
+        Analyse le sentiment d'un texte avec MLX.
+
+        Returns:
+            {
+                "score": float,  # -1.0 à 1.0
+                "label": str,    # "positive", "negative", "neutral"
+                "confidence": float,
+                "probabilities": {"positive": float, "negative": float}
+            }
+        """
+        import mlx.core as mx
+
+        self._lazy_init()
+
+        # Tokeniser
+        inputs = self._tokenizer(
+            text,
+            return_tensors="np",
+            max_length=self._max_length,
+            truncation=True,
+            padding="max_length",
+        )
+
+        # Convertir en MLX arrays (zero-copy sur Apple Silicon)
+        input_ids = mx.array(inputs["input_ids"])
+        attention_mask = mx.array(inputs["attention_mask"])
+
+        # Inférence
+        with mx.no_grad():
+            outputs = self._model(input_ids, attention_mask=attention_mask)
+            logits = outputs.logits
+            probs = mx.softmax(logits, axis=-1)
+
+        # Extraire les probabilités (0=négatif, 1=positif pour SST-2)
+        probs_np = probs.tolist()[0]
+        neg_prob = probs_np[0]
+        pos_prob = probs_np[1]
+
+        # Score normalisé [-1, 1]
+        score = pos_prob - neg_prob
+
+        # Label
+        if score > 0.2:
+            label = "positive"
+        elif score < -0.2:
+            label = "negative"
+        else:
+            label = "neutral"
+
+        # Confidence = écart entre les probas
+        confidence = abs(pos_prob - neg_prob)
+
+        return {
+            "score": round(score, 3),
+            "label": label,
+            "confidence": round(confidence, 3),
+            "probabilities": {
+                "positive": round(pos_prob, 3),
+                "negative": round(neg_prob, 3),
+            },
+            "backend": "mlx",
+        }
+
+    def analyze_batch(self, texts: List[str]) -> List[Dict[str, Any]]:
+        """
+        Analyse par batch (optimisé pour MLX lazy evaluation).
+        MLX batche automatiquement les opérations pour le GPU.
+        """
+        import mlx.core as mx
+
+        self._lazy_init()
+
+        if not texts:
+            return []
+
+        # Tokeniser tout le batch
+        inputs = self._tokenizer(
+            texts,
+            return_tensors="np",
+            max_length=self._max_length,
+            truncation=True,
+            padding="max_length",
+        )
+
+        # Convertir en MLX
+        input_ids = mx.array(inputs["input_ids"])
+        attention_mask = mx.array(inputs["attention_mask"])
+
+        # Inférence batch
+        with mx.no_grad():
+            outputs = self._model(input_ids, attention_mask=attention_mask)
+            probs = mx.softmax(outputs.logits, axis=-1)
+
+        # Convertir les résultats
+        probs_list = probs.tolist()
+        results = []
+
+        for probs_item in probs_list:
+            neg_prob, pos_prob = probs_item[0], probs_item[1]
+            score = pos_prob - neg_prob
+
+            if score > 0.2:
+                label = "positive"
+            elif score < -0.2:
+                label = "negative"
+            else:
+                label = "neutral"
+
+            results.append({
+                "score": round(score, 3),
+                "label": label,
+                "confidence": round(abs(pos_prob - neg_prob), 3),
+                "probabilities": {
+                    "positive": round(pos_prob, 3),
+                    "negative": round(neg_prob, 3),
+                },
+                "backend": "mlx",
+            })
+
+        return results
+
+
+# Enregistrer dans le registry
+from src.tools.factories import register_sentiment_analyzer
+
+@register_sentiment_analyzer("mlx")
+class _MLXSentiment(MLXSentimentAnalyzer):
+    pass
+```
+
+**Critères de validation**:
+- [ ] Initialisation paresseuse du modèle
+- [ ] Inférence single et batch
+- [ ] Score normalisé [-1, 1]
+- [ ] Fallback clair si MLX indisponible
+- [ ] Tests sur Mac M4
+
+---
+
+### T2.7.2 - Implémenter CoreMLSentimentAnalyzer (BaseSentimentAnalyzer)
+**Priorité**: HAUTE
+**Estimation**: Moyenne
+
+Créer `src/accelerators/coreml_sentiment.py` avec inférence sur Neural Engine :
+
+```python
+"""
+Analyseur de sentiment utilisant Core ML sur Neural Engine.
+~10x plus rapide que CPU, ~3x plus économe en énergie.
+"""
+
+from typing import Any, Dict, List, Optional
+from pathlib import Path
+
+from src.interfaces import BaseSentimentAnalyzer
+from src.hardware import detect_hardware
+
+
+class CoreMLSentimentAnalyzer(BaseSentimentAnalyzer):
+    """
+    Analyseur de sentiment utilisant Core ML (Neural Engine).
+
+    Le Neural Engine du M4 offre 38 TOPS pour l'inférence.
+    Idéal pour des analyses fréquentes avec latence minimale.
+
+    Note: Nécessite un modèle pré-converti au format .mlpackage
+    Utiliser coremltools pour convertir depuis HuggingFace.
+    """
+
+    def __init__(
+        self,
+        model_path: Optional[str] = None,
+        model_name: str = "finbert_sentiment.mlpackage",
+        max_length: int = 128,
+    ) -> None:
+        self._model_path = model_path or str(
+            Path(__file__).parent.parent / "models" / model_name
+        )
+        self._max_length = max_length
+        self._model = None
+        self._tokenizer = None
+        self._initialized = False
+
+        # Vérifier Core ML disponible
+        hw = detect_hardware()
+        if not hw.has_coreml:
+            raise RuntimeError(
+                "Core ML non disponible. Utiliser MLXSentimentAnalyzer "
+                "ou RuleBasedSentiment comme fallback."
+            )
+
+    @property
+    def name(self) -> str:
+        return "coreml_sentiment"
+
+    def _lazy_init(self) -> None:
+        """Charge le modèle Core ML au premier appel"""
+        if self._initialized:
+            return
+
+        try:
+            import coremltools as ct
+            from transformers import AutoTokenizer
+
+            # Charger le modèle Core ML
+            self._model = ct.models.MLModel(
+                self._model_path,
+                compute_units=ct.ComputeUnit.ALL  # Inclut Neural Engine
+            )
+
+            # Tokenizer correspondant
+            self._tokenizer = AutoTokenizer.from_pretrained(
+                "ProsusAI/finbert"  # ou le modèle source
+            )
+
+            self._initialized = True
+
+        except FileNotFoundError:
+            raise RuntimeError(
+                f"Modèle Core ML non trouvé: {self._model_path}. "
+                "Exécuter scripts/convert_to_coreml.py d'abord."
+            )
+        except Exception as e:
+            raise RuntimeError(f"Erreur chargement Core ML: {e}")
+
+    def analyze(self, text: str) -> Dict[str, Any]:
+        """Analyse avec Neural Engine"""
+        import numpy as np
+
+        self._lazy_init()
+
+        # Tokeniser
+        inputs = self._tokenizer(
+            text,
+            return_tensors="np",
+            max_length=self._max_length,
+            truncation=True,
+            padding="max_length",
+        )
+
+        # Préparer pour Core ML
+        input_dict = {
+            "input_ids": inputs["input_ids"].astype(np.int32),
+            "attention_mask": inputs["attention_mask"].astype(np.int32),
+        }
+
+        # Inférence sur Neural Engine
+        outputs = self._model.predict(input_dict)
+
+        # Extraire logits et calculer probas
+        logits = outputs["logits"][0]
+        probs = self._softmax(logits)
+
+        # FinBERT: [negative, neutral, positive]
+        neg_prob, neut_prob, pos_prob = probs
+
+        # Score composite
+        score = pos_prob - neg_prob
+
+        # Label
+        max_idx = np.argmax(probs)
+        labels = ["negative", "neutral", "positive"]
+        label = labels[max_idx]
+
+        return {
+            "score": round(float(score), 3),
+            "label": label,
+            "confidence": round(float(probs[max_idx]), 3),
+            "probabilities": {
+                "positive": round(float(pos_prob), 3),
+                "neutral": round(float(neut_prob), 3),
+                "negative": round(float(neg_prob), 3),
+            },
+            "backend": "coreml_neural_engine",
+        }
+
+    def analyze_batch(self, texts: List[str]) -> List[Dict[str, Any]]:
+        """
+        Analyse batch séquentielle.
+        Note: Core ML supporte le batching mais la tokenization
+        doit être gérée individuellement.
+        """
+        # Pour des performances optimales avec gros batches,
+        # considérer MLXSentimentAnalyzer qui gère mieux le batching
+        return [self.analyze(text) for text in texts]
+
+    @staticmethod
+    def _softmax(x):
+        """Softmax numpy"""
+        import numpy as np
+        e_x = np.exp(x - np.max(x))
+        return e_x / e_x.sum()
+
+
+# Utilitaire de conversion
+def convert_finbert_to_coreml(output_path: str = "models/finbert_sentiment.mlpackage"):
+    """
+    Convertit FinBERT HuggingFace vers Core ML.
+    À exécuter une fois pour préparer le modèle.
+
+    Usage:
+        python -c "from src.accelerators.coreml_sentiment import convert_finbert_to_coreml; convert_finbert_to_coreml()"
+    """
+    import coremltools as ct
+    from transformers import AutoModelForSequenceClassification, AutoTokenizer
+    import torch
+
+    print("Chargement FinBERT depuis HuggingFace...")
+    model = AutoModelForSequenceClassification.from_pretrained("ProsusAI/finbert")
+    tokenizer = AutoTokenizer.from_pretrained("ProsusAI/finbert")
+
+    model.eval()
+
+    # Exemple d'entrée pour le trace
+    dummy_input = tokenizer(
+        "Bitcoin price surges",
+        return_tensors="pt",
+        max_length=128,
+        padding="max_length",
+    )
+
+    print("Tracing PyTorch model...")
+    traced_model = torch.jit.trace(
+        model,
+        (dummy_input["input_ids"], dummy_input["attention_mask"]),
+    )
+
+    print("Conversion vers Core ML...")
+    mlmodel = ct.convert(
+        traced_model,
+        inputs=[
+            ct.TensorType(name="input_ids", shape=(1, 128), dtype=ct.int32),
+            ct.TensorType(name="attention_mask", shape=(1, 128), dtype=ct.int32),
+        ],
+        outputs=[ct.TensorType(name="logits")],
+        compute_units=ct.ComputeUnit.ALL,
+        minimum_deployment_target=ct.target.macOS14,  # Pour M4
+    )
+
+    # Métadonnées
+    mlmodel.author = "OtterTrend"
+    mlmodel.short_description = "FinBERT sentiment analysis for crypto news"
+    mlmodel.version = "1.0"
+
+    print(f"Sauvegarde vers {output_path}...")
+    mlmodel.save(output_path)
+    print("Conversion terminée!")
+
+    return output_path
+```
+
+**Critères de validation**:
+- [ ] Chargement modèle .mlpackage
+- [ ] Inférence sur Neural Engine (ComputeUnit.ALL)
+- [ ] Script de conversion HuggingFace → Core ML
+- [ ] Fallback si modèle non converti
+- [ ] Tests performances vs CPU
+
+---
+
+### T2.7.3 - Accélération des calculs vectoriels avec MLX
+**Priorité**: MOYENNE
+**Estimation**: Simple
+
+Modifier `src/tools/analytics.py` pour utiliser MLX quand disponible :
+
+```python
+"""
+Analytics avec accélération MLX optionnelle.
+Utilise la mémoire unifiée pour éviter les copies CPU<->GPU.
+"""
+
+from typing import Dict, List, Optional
+from src.hardware import detect_hardware, ComputeBackend
+
+# Détection au chargement du module
+_HW = detect_hardware()
+_USE_MLX = _HW.has_mlx and _HW.recommended_backend == ComputeBackend.MLX
+
+if _USE_MLX:
+    import mlx.core as mx
+
+    def _to_array(data: List[float]):
+        return mx.array(data)
+
+    def _std(arr) -> float:
+        return float(mx.std(arr))
+
+    def _mean(arr) -> float:
+        return float(mx.mean(arr))
+
+    def _diff(arr):
+        return arr[1:] - arr[:-1]
+
+    def _log(arr):
+        return mx.log(arr)
+
+    def _where(cond, x, y):
+        return mx.where(cond, x, y)
+
+else:
+    import numpy as np
+
+    def _to_array(data: List[float]):
+        return np.array(data)
+
+    def _std(arr) -> float:
+        return float(np.std(arr))
+
+    def _mean(arr) -> float:
+        return float(np.mean(arr))
+
+    def _diff(arr):
+        return np.diff(arr)
+
+    def _log(arr):
+        return np.log(arr)
+
+    def _where(cond, x, y):
+        return np.where(cond, x, y)
+
+
+def compute_returns(prices: List[float]) -> List[float]:
+    """Calcule les returns logarithmiques (MLX/NumPy)"""
+    if len(prices) < 2:
+        return []
+    arr = _to_array(prices)
+    returns = _diff(_log(arr))
+    return list(returns) if not _USE_MLX else returns.tolist()
+
+
+def compute_volatility(prices: List[float], annualize: bool = False) -> float:
+    """Calcule la volatilité avec accélération MLX si disponible"""
+    if len(prices) < 2:
+        return 0.0
+
+    arr = _to_array(prices)
+    log_arr = _log(arr)
+    returns = _diff(log_arr)
+
+    vol = _std(returns)
+
+    if annualize:
+        # sqrt(365*24) pour données horaires
+        vol *= 93.67  # Pre-computed sqrt(8760)
+
+    return round(vol, 4)
+
+
+def compute_rsi(prices: List[float], period: int = 14) -> float:
+    """RSI avec accélération MLX"""
+    if len(prices) < period + 1:
+        return 50.0
+
+    arr = _to_array(prices)
+    deltas = _diff(arr)
+
+    gains = _where(deltas > 0, deltas, 0.0)
+    losses = _where(deltas < 0, -deltas, 0.0)
+
+    # Moyenne sur la période
+    if _USE_MLX:
+        avg_gain = float(mx.mean(gains[-period:]))
+        avg_loss = float(mx.mean(losses[-period:]))
+    else:
+        avg_gain = float(gains[-period:].mean())
+        avg_loss = float(losses[-period:].mean())
+
+    if avg_loss == 0:
+        return 100.0
+
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs))
+
+    return round(rsi, 2)
+
+
+def batch_cosine_similarity_mlx(
+    query_embedding: List[float],
+    embeddings: List[List[float]],
+) -> List[float]:
+    """
+    Calcul de similarité cosinus batch avec MLX.
+    Optimisé pour la recherche dans des embeddings.
+
+    ~10x plus rapide que NumPy sur M4 pour gros batches.
+    """
+    if not _USE_MLX:
+        # Fallback NumPy
+        import numpy as np
+        q = np.array(query_embedding)
+        e = np.array(embeddings)
+
+        q_norm = q / np.linalg.norm(q)
+        e_norms = e / np.linalg.norm(e, axis=1, keepdims=True)
+
+        return list(e_norms @ q_norm)
+
+    # MLX optimisé
+    q = mx.array(query_embedding)
+    e = mx.array(embeddings)
+
+    # Normaliser
+    q_norm = q / mx.linalg.norm(q)
+    e_norms = e / mx.linalg.norm(e, axis=1, keepdims=True)
+
+    # Dot product batch (exploite le GPU)
+    similarities = e_norms @ q_norm
+
+    return similarities.tolist()
+
+
+# Informations sur le backend utilisé
+def get_compute_info() -> Dict[str, any]:
+    """Retourne les infos sur le backend de calcul"""
+    return {
+        "backend": "mlx" if _USE_MLX else "numpy",
+        "hardware": _HW.chip_name if _HW.is_apple_silicon else "generic",
+        "neural_engine_tops": _HW.neural_engine_tops if _HW.is_apple_silicon else 0,
+        "unified_memory": _HW.is_apple_silicon,
+    }
+```
+
+**Critères de validation**:
+- [ ] Fallback transparent NumPy si pas MLX
+- [ ] Mêmes résultats MLX vs NumPy (tests)
+- [ ] Batch cosine similarity optimisé
+- [ ] Fonction get_compute_info() pour debug
+
+---
+
+### T2.7.4 - Adapter TrendAnalyzer pour backends hardware
+**Priorité**: MOYENNE
+**Estimation**: Simple
+
+Modifier `TrendAnalyzer` pour utiliser le meilleur backend disponible :
+
+```python
+# Dans src/tools/trends.py - Modifier TrendAnalyzer
+
+class TrendAnalyzer:
+    """
+    Agrégateur de tendances avec sélection automatique du backend.
+    """
+
+    def __init__(
+        self,
+        sentiment_backend: str = "auto",  # "auto", "mlx", "coreml", "rules"
+    ) -> None:
+        self.trends_client = GoogleTrendsProvider()
+        self.news_client = CryptoCompareProvider()
+
+        # Sélection du sentiment analyzer
+        self._sentiment = self._create_sentiment_analyzer(sentiment_backend)
+
+    def _create_sentiment_analyzer(
+        self, backend: str
+    ) -> BaseSentimentAnalyzer:
+        """
+        Crée l'analyseur de sentiment selon le backend demandé.
+        "auto" sélectionne le plus performant disponible.
+        """
+        from src.hardware import detect_hardware, ComputeBackend
+        from src.tools.factories import create_sentiment_analyzer
+
+        if backend != "auto":
+            return create_sentiment_analyzer(backend)
+
+        # Auto-détection
+        hw = detect_hardware()
+
+        # Priorité: CoreML (Neural Engine) > MLX (GPU) > Rules (CPU)
+        if hw.has_coreml:
+            try:
+                return create_sentiment_analyzer("coreml")
+            except Exception:
+                pass  # Modèle pas converti, fallback
+
+        if hw.has_mlx:
+            try:
+                return create_sentiment_analyzer("mlx")
+            except Exception:
+                pass  # Erreur init, fallback
+
+        # Fallback CPU
+        return create_sentiment_analyzer("rules")
+
+    async def get_trend_snapshot(self, ...) -> Dict[str, Any]:
+        """... (code existant) ..."""
+        # Utilise self._sentiment.analyze_batch() pour les news
+        ...
+
+    @property
+    def sentiment_backend_info(self) -> Dict[str, Any]:
+        """Retourne les infos sur le backend sentiment utilisé"""
+        from src.tools.analytics import get_compute_info
+        return {
+            "sentiment_analyzer": self._sentiment.name,
+            "compute": get_compute_info(),
+        }
+```
+
+**Critères de validation**:
+- [ ] Auto-détection du meilleur backend
+- [ ] Fallback gracieux si erreur
+- [ ] Propriété pour debug backend utilisé
+
+---
+
+### T2.7.5 - Script de benchmark backends
+**Priorité**: BASSE
+**Estimation**: Simple
+
+Créer `scripts/benchmark_sentiment.py` :
+
+```python
+#!/usr/bin/env python3
+"""
+Benchmark des différents backends de sentiment analysis.
+Compare CPU (rules), MLX, et Core ML sur M4.
+"""
+
+import asyncio
+import time
+from typing import List, Dict
+
+# Textes de test
+TEST_TEXTS = [
+    "Bitcoin surges to new all-time high amid institutional adoption",
+    "Crypto market crashes as SEC announces new regulations",
+    "Ethereum upgrade delayed due to technical issues",
+    "Major partnership announced between Solana and major bank",
+    "Security vulnerability discovered in popular DeFi protocol",
+    # ... ajouter plus de textes
+] * 20  # 100 textes pour le benchmark
+
+
+def benchmark_backend(name: str, analyzer, texts: List[str]) -> Dict:
+    """Benchmark un backend"""
+    # Warmup
+    _ = analyzer.analyze(texts[0])
+
+    # Single inference
+    start = time.perf_counter()
+    for text in texts[:10]:
+        _ = analyzer.analyze(text)
+    single_time = (time.perf_counter() - start) / 10
+
+    # Batch inference
+    start = time.perf_counter()
+    _ = analyzer.analyze_batch(texts)
+    batch_time = time.perf_counter() - start
+
+    return {
+        "name": name,
+        "single_avg_ms": round(single_time * 1000, 2),
+        "batch_total_ms": round(batch_time * 1000, 2),
+        "batch_per_item_ms": round(batch_time * 1000 / len(texts), 2),
+        "texts_per_second": round(len(texts) / batch_time, 1),
+    }
+
+
+def main():
+    from src.hardware import detect_hardware
+    from src.tools.factories import create_sentiment_analyzer
+
+    hw = detect_hardware()
+    print(f"Hardware: {hw.chip_name}")
+    print(f"Neural Engine: {hw.neural_engine_tops} TOPS")
+    print(f"MLX disponible: {hw.has_mlx}")
+    print(f"Core ML disponible: {hw.has_coreml}")
+    print("-" * 50)
+
+    results = []
+
+    # Test Rule-based (baseline)
+    print("Testing: Rule-based (CPU)...")
+    analyzer = create_sentiment_analyzer("rules")
+    results.append(benchmark_backend("rules_cpu", analyzer, TEST_TEXTS))
+
+    # Test MLX si disponible
+    if hw.has_mlx:
+        print("Testing: MLX (GPU)...")
+        try:
+            analyzer = create_sentiment_analyzer("mlx")
+            results.append(benchmark_backend("mlx_gpu", analyzer, TEST_TEXTS))
+        except Exception as e:
+            print(f"  Erreur MLX: {e}")
+
+    # Test Core ML si disponible
+    if hw.has_coreml:
+        print("Testing: Core ML (Neural Engine)...")
+        try:
+            analyzer = create_sentiment_analyzer("coreml")
+            results.append(benchmark_backend("coreml_ne", analyzer, TEST_TEXTS))
+        except Exception as e:
+            print(f"  Erreur Core ML: {e}")
+
+    # Afficher résultats
+    print("\n" + "=" * 60)
+    print("RÉSULTATS BENCHMARK")
+    print("=" * 60)
+
+    for r in results:
+        print(f"\n{r['name'].upper()}:")
+        print(f"  Single inference: {r['single_avg_ms']} ms/text")
+        print(f"  Batch (100 texts): {r['batch_total_ms']} ms total")
+        print(f"  Throughput: {r['texts_per_second']} texts/sec")
+
+    # Comparaison
+    if len(results) > 1:
+        baseline = results[0]["batch_total_ms"]
+        print("\n" + "-" * 40)
+        print("Speedup vs CPU baseline:")
+        for r in results[1:]:
+            speedup = baseline / r["batch_total_ms"]
+            print(f"  {r['name']}: {speedup:.1f}x faster")
+
+
+if __name__ == "__main__":
+    main()
+```
+
+**Critères de validation**:
+- [ ] Benchmark single et batch
+- [ ] Comparaison speedup vs baseline
+- [ ] Affichage hardware détecté
+
+---
+
+### T2.7.6 - Mise à jour factory avec backends hardware
+**Priorité**: HAUTE
+**Estimation**: Simple
+
+Mettre à jour `src/tools/factories.py` :
+
+```python
+# Ajouter les imports conditionnels pour les backends hardware
+
+def _register_hardware_backends():
+    """Enregistre les backends hardware si disponibles"""
+    from src.hardware import detect_hardware
+
+    hw = detect_hardware()
+
+    if hw.has_mlx:
+        try:
+            from src.accelerators.mlx_sentiment import MLXSentimentAnalyzer
+            SENTIMENT_REGISTRY["mlx"] = MLXSentimentAnalyzer
+        except ImportError:
+            pass
+
+    if hw.has_coreml:
+        try:
+            from src.accelerators.coreml_sentiment import CoreMLSentimentAnalyzer
+            SENTIMENT_REGISTRY["coreml"] = CoreMLSentimentAnalyzer
+        except ImportError:
+            pass
+
+
+# Appeler à l'import du module
+_register_hardware_backends()
+```
+
+**Critères de validation**:
+- [ ] Enregistrement conditionnel des backends
+- [ ] Pas d'erreur si dépendances manquantes
+- [ ] Factory crée le bon backend
