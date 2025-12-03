@@ -9,6 +9,10 @@
 - Phase 0-4 complètes
 - Particulièrement: Phase 1 (market client), Phase 4 (tool router)
 
+**Paramètres de base** :
+* Lire les seuils via `.env` (`RISK_MAX_TRADE_USD`, `RISK_MAX_TRADE_PCT_EQUITY`, `RISK_MIN_LIQUIDITY_USD`, `RISK_LOW_LIQUIDITY_CAP_USD`).
+* Ajouter `estimate_pair_liquidity(symbol)` : refuse les paires sous le seuil de volume 24h et plafonne les ordres bas-volumes.
+
 ---
 
 ## T5.1 - Risk Manager Complet

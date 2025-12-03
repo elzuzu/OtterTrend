@@ -9,6 +9,11 @@
 - Phase 0 complète (structure de base)
 - Phase 1 partielle (config, base exchange)
 
+**Scope MVP** :
+* Google Trends avec mots-clés `socialfi`, `crypto airdrop`, `memecoin`.
+* Nouveaux listings MEXC + top gainers 24h MEXC depuis le wrapper exchange.
+* Pas de sentiment social avancé (X/Farcaster) ni d'outils V2 pour le moment.
+
 ---
 
 ## T2.1 - Google Trends Integration
