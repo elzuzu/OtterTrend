@@ -10,7 +10,14 @@ from src.bot.system_prompt import SYSTEM_PROMPT
 from src.client.exchange_factory import get_exchange
 from src.client.groq_adapter import GroqAdapter
 from src.config import get_settings
-from src.tools.market import LiquidityTool, MarketReader, MarketSnapshotTool, NewListingsTool, TopGainersTool
+from src.tools.market import (
+    LiquidityTool,
+    MarketReader,
+    MarketSnapshotTool,
+    NewListingsTool,
+    RiskConstraintsTool,
+    TopGainersTool,
+)
 
 
 class BotLoop:
@@ -27,6 +34,7 @@ class BotLoop:
             NewListingsTool(self.reader),
             TopGainersTool(self.reader),
             LiquidityTool(self.reader),
+            RiskConstraintsTool(self.reader),
         ]
 
     async def observe(self) -> Dict[str, Any]:
