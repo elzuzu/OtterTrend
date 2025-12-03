@@ -96,10 +96,10 @@ Phase 0 (Setup)
 
 | ID | Tâche | Priorité | Statut |
 |----|-------|----------|--------|
-| T1.1.1 | Wrapper CCXT multi-exchange | CRITIQUE | 🔴 |
-| T1.1.2 | Méthodes de lecture marché | CRITIQUE | 🔴 |
-| T1.2.1 | Méthodes de lecture portefeuille | CRITIQUE | 🔴 |
-| T1.2.2 | Snapshot marché complet | HAUTE | 🔴 |
+| T1.1.1 | Wrapper CCXT multi-exchange | CRITIQUE | 🟢 |
+| T1.1.2 | Méthodes de lecture marché | CRITIQUE | 🟢 |
+| T1.2.1 | Méthodes de lecture portefeuille | CRITIQUE | 🟢 |
+| T1.2.2 | Snapshot marché complet | HAUTE | 🟢 |
 | T1.3.1 | Passation d'ordres | CRITIQUE | 🔴 |
 | T1.4.1 | Détection nouveaux listings | HAUTE | 🔴 |
 | T1.4.2 | Scan top gainers | HAUTE | 🔴 |

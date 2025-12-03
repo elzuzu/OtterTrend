@@ -24,6 +24,14 @@ class BaseExchange(ABC):
         ...
 
     @abstractmethod
+    async def fetch_order_book(self, symbol: str, limit: int | None = None) -> Dict[str, Any]:
+        ...
+
+    @abstractmethod
+    async def fetch_ohlcv(self, symbol: str, timeframe: str = "1h", limit: int = 100) -> List[List[float]]:
+        ...
+
+    @abstractmethod
     async def fetch_balance(self) -> Dict[str, Any]:
         ...
 

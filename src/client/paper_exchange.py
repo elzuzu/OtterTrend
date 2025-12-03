@@ -23,6 +23,15 @@ class PaperExchange(BaseExchange):
     async def fetch_tickers(self) -> Dict[str, Any]:
         return {}
 
+    async def fetch_order_book(self, symbol: str, limit: int | None = None) -> Dict[str, Any]:
+        depth = limit or 20
+        bids = [[0.99, 1.0]] * depth
+        asks = [[1.01, 1.0]] * depth
+        return {"symbol": symbol, "bids": bids, "asks": asks, "timestamp": None}
+
+    async def fetch_ohlcv(self, symbol: str, timeframe: str = "1h", limit: int = 100) -> List[List[float]]:
+        return [[0, 1.0, 1.0, 1.0, 1.0, 0.0] for _ in range(limit)]
+
     async def fetch_balance(self) -> Dict[str, Any]:
         return self.balance
 

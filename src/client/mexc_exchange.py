@@ -9,14 +9,27 @@ from src.interfaces.exchange import BaseExchange
 
 
 class MEXCExchange(BaseExchange):
-    def __init__(self, api_key: str, api_secret: str, http_client: Optional[object] = None) -> None:
+    def __init__(self, api_key: str, api_secret: str, testnet: bool = False, http_client: Optional[object] = None) -> None:
         self.id = "mexc"
-        self.client = ccxt.mexc({
-            "apiKey": api_key,
-            "secret": api_secret,
-            "enableRateLimit": True,
-        })
+        self.api_key = api_key
+        self.api_secret = api_secret
+        self.testnet = testnet
         self.http_client = http_client
+        self._client: Optional[ccxt.Exchange] = None
+
+    @property
+    def client(self) -> ccxt.Exchange:
+        if self._client is None:
+            params = {
+                "apiKey": self.api_key,
+                "secret": self.api_secret,
+                "enableRateLimit": True,
+                "options": {"defaultType": "spot", "recvWindow": 60_000},
+            }
+            self._client = ccxt.mexc(params)
+            if self.testnet:
+                self._client.set_sandbox_mode(True)
+        return self._client
 
     async def connect(self) -> None:
         await self.client.load_markets()
@@ -31,6 +44,14 @@ class MEXCExchange(BaseExchange):
     async def fetch_tickers(self) -> Dict[str, Any]:
         await asyncio.sleep(self.client.rateLimit / 1000)
         return await self.client.fetch_tickers()
+
+    async def fetch_order_book(self, symbol: str, limit: int | None = None) -> Dict[str, Any]:
+        await asyncio.sleep(self.client.rateLimit / 1000)
+        return await self.client.fetch_order_book(symbol, limit)
+
+    async def fetch_ohlcv(self, symbol: str, timeframe: str = "1h", limit: int = 100) -> List[List[float]]:
+        await asyncio.sleep(self.client.rateLimit / 1000)
+        return await self.client.fetch_ohlcv(symbol, timeframe, limit=limit)
 
     async def fetch_balance(self) -> Dict[str, Any]:
         await asyncio.sleep(self.client.rateLimit / 1000)
@@ -56,7 +77,9 @@ class MEXCExchange(BaseExchange):
         return None
 
     async def close(self) -> None:
-        await self.client.close()
+        if self._client:
+            await self._client.close()
+            self._client = None
 
 
 __all__ = ["MEXCExchange"]

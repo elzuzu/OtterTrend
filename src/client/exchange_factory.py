@@ -18,6 +18,7 @@ def get_exchange(settings: AppSettings, http_client: Optional[object] = None) ->
         return MEXCExchange(
             api_key=settings.mexc_api_key,
             api_secret=settings.mexc_api_secret,
+            testnet=settings.exchange_testnet,
             http_client=http_client,
         )
 

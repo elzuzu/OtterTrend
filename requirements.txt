@@ -1,6 +1,7 @@
 asyncio
 python-dotenv
 pydantic
+pydantic-settings
 ccxt
 httpx
 rich

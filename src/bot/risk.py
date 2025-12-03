@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Dict, List
 
+from typing import Dict, List
+
 from src.interfaces.risk_rule import RiskCheckResult, RiskContext, RiskRule
 
 
