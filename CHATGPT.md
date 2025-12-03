@@ -1,9 +1,3 @@
-C'est un défi technique passionnant. Tu veux détourner un outil conçu pour le chat (Gemini CLI) pour en faire un **agent de trading autonome**, tout en gardant son esthétique (visualisation de la "pensée" en temps réel dans le terminal) mais en changeant le cerveau (Groq) et le corps (CCXT/OKX).
-
-Voici la **spécification technique complète** (Prompt Engineering + Architecture Logicielle) que tu peux copier-coller pour instruire un développeur senior ou un agent de coding (comme Cursor/Windsurf) pour réaliser ce projet.
-
------
-
 # Spécification Technique : Projet "Gemini-CLI-Bot SocialFi Autonome"
 
 ## 1\. Objectif du Projet
