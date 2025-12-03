@@ -5,7 +5,8 @@ from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
-from pydantic import BaseModel, BaseSettings, Field, validator
+from pydantic import BaseModel, Field, validator
+from pydantic_settings import BaseSettings
 
 
 class HardwareConfig(BaseModel):
@@ -27,6 +28,7 @@ class AppSettings(BaseSettings):
     risk_max_daily_loss_usd: float = Field(50.0, env="RISK_MAX_DAILY_LOSS_USD")
     risk_max_open_positions: int = Field(5, env="RISK_MAX_OPEN_POSITIONS")
     risk_max_spread_pct: float = Field(2.0, env="RISK_MAX_SPREAD_PCT")
+    watchlist_symbols: list[str] = Field(default_factory=list, env="WATCHLIST_SYMBOLS")
     sqlite_db_path: Path = Field(Path("./data/bot.sqlite3"), env="SQLITE_DB_PATH")
     log_level: str = Field("INFO", env="LOG_LEVEL")
     hardware: HardwareConfig = Field(default_factory=HardwareConfig)
@@ -39,6 +41,14 @@ class AppSettings(BaseSettings):
     @validator("exchange_id")
     def normalize_exchange(cls, value: str) -> str:
         return value.lower()
+
+    @validator("watchlist_symbols", pre=True)
+    def parse_watchlist(cls, value: str | list[str]) -> list[str]:
+        if isinstance(value, list):
+            return value
+        if isinstance(value, str) and value.strip():
+            return [sym.strip() for sym in value.split(",") if sym.strip()]
+        return []
 
 
 @lru_cache()

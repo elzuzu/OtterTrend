@@ -3,26 +3,16 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from src.config import get_settings
+from src.config import AppSettings, get_settings
 from src.interfaces.base_tool import BaseTool, ToolDefinition
 from src.interfaces.exchange import BaseExchange
 from src.tools.registry import register_tool
 
 
-SOCIALFI_DEFAULTS = [
-    "BTC/USDT",
-    "ETH/USDT",
-    "SOL/USDT",
-    "CYBER/USDT",
-    "ID/USDT",
-    "DEGEN/USDT",
-]
-
-
 class MarketReader:
-    def __init__(self, exchange: BaseExchange) -> None:
+    def __init__(self, exchange: BaseExchange, settings: AppSettings | None = None) -> None:
         self.exchange = exchange
-        self.settings = get_settings()
+        self.settings = settings or get_settings()
 
     async def get_market_price(self, symbol: str) -> float:
         ticker = await self.exchange.fetch_ticker(symbol)
@@ -43,7 +33,7 @@ class MarketReader:
         }
 
     async def get_tickers(self, symbols: Optional[List[str]] = None) -> Dict[str, Dict[str, Any]]:
-        tickers = await self.exchange.fetch_tickers() if symbols is None else await self.exchange.fetch_tickers()
+        tickers = await self.exchange.fetch_tickers()
         result: Dict[str, Dict[str, Any]] = {}
         for sym, data in tickers.items():
             if symbols and sym not in symbols:
@@ -130,8 +120,17 @@ class MarketReader:
             "positions_count": len(positions),
         }
 
+    async def _resolve_symbols(self, symbols: Optional[List[str]] = None) -> Optional[List[str]]:
+        if symbols:
+            return symbols
+        if self.settings.watchlist_symbols:
+            return self.settings.watchlist_symbols
+        markets = await self.exchange.fetch_markets()
+        inferred = [m.get("symbol") for m in markets if m.get("quote") == "USDT" and m.get("symbol")]
+        return inferred[:10] if inferred else None
+
     async def get_market_snapshot(self, symbols: Optional[List[str]] = None) -> Dict[str, Any]:
-        selected = symbols or SOCIALFI_DEFAULTS
+        selected = await self._resolve_symbols(symbols)
         tickers = await self.get_tickers(selected)
         portfolio = await self.get_portfolio_state()
         return {
